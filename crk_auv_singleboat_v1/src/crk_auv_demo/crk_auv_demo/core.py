@@ -53,22 +53,25 @@ class ControlLaw:
             raise RuntimeError('Bounded thrust allocation failed')
         return result.x
 
-    def step(self, position, quaternion, body_velocity, body_rates, target, dt):
-        inputs = np.r_[position, quaternion, body_velocity, body_rates, target, dt]
+    def execute_acceleration(self, world_acceleration, quaternion, body_velocity, body_rates, dt):
+        """Execute an already composed world-frame acceleration, without a waypoint prior.
+
+        This layer never integrates position/velocity or rescales actor actions.
+        Gazebo owns the physical state transition.
+        """
+        world_acceleration = np.asarray(world_acceleration, dtype=float)
+        if world_acceleration.shape != (3,):
+            raise ValueError('Expected a three-dimensional world acceleration')
+        inputs = np.r_[world_acceleration, quaternion, body_velocity, body_rates, dt]
         if not np.isfinite(inputs).all() or not 0 < dt <= 0.2:
             raise ValueError('Nonfinite state or invalid control interval')
         R = rotation(quaternion)
-        world_velocity = R @ body_velocity
         c = self.config['control']
-        desired_velocity = np.clip(c['position_gain'] * (target-position),
-                                   -c['speed_limit_m_s'], c['speed_limit_m_s'])
-        acceleration = np.clip(c['velocity_gain'] * (desired_velocity-world_velocity),
-                               -c['accel_limit_m_s2'], c['accel_limit_m_s2'])
         # Feed forward nominal zero-current drag, not the Python environment's dynamics.
         linear = np.array(self.config['linear_drag'])
         quadratic = np.array(self.config['quadratic_drag'])
         drag = linear[:3]*body_velocity + quadratic[:3]*np.abs(body_velocity)*body_velocity
-        body_force = R.T @ (self.config['mass_kg'] * acceleration) + drag
+        body_force = R.T @ (self.config['mass_kg'] * world_acceleration) + drag
         q = np.array(quaternion, dtype=float)
         q /= np.linalg.norm(q)
         if q[3] < 0:

@@ -12,9 +12,11 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, String
 
 from crk_auv_demo.core import ControlLaw, WaypointSequence, rpy
+from crk_auv_demo.policy import PolicyPipeline, TaskContext
+from crk_auv_demo.actors import TorchScriptActor
 
 
 class Tracker(Node):
@@ -24,8 +26,21 @@ class Tracker(Node):
         self.declare_parameter('vehicle_file', str(share/'config/vehicle.json'))
         self.declare_parameter('waypoints_file', str(share/'config/waypoints.json'))
         self.declare_parameter('output_dir', '/tmp/crk_auv_results')
+        self.declare_parameter('policy_file', str(share/'config/policy_demo.json'))
+        self.declare_parameter('policy_mode', 'zero')
+        self.declare_parameter('actor_path', '')
+        self.declare_parameter('actor_metadata_path', '')
         self.config = json.loads(Path(self.get_parameter('vehicle_file').value).read_text())
         self.plan = json.loads(Path(self.get_parameter('waypoints_file').value).read_text())
+        policy_path = Path(self.get_parameter('policy_file').value)
+        self.policy_config = json.loads(policy_path.read_text(encoding='utf-8'))
+        self.policy_mode = self.get_parameter('policy_mode').value
+        actor = None
+        if self.policy_mode == 'torchscript':
+            actor = TorchScriptActor(self.get_parameter('actor_path').value,
+                                     self.get_parameter('actor_metadata_path').value, policy_path)
+        self.policy = PolicyPipeline(self.policy_config, self.policy_mode, actor)
+        self.actor_metadata = None if actor is None else actor.metadata
         self.control = ControlLaw(self.config)
         self.sequence = WaypointSequence(self.plan['points'], self.plan['arrival_radius_m'],
                                          self.plan['arrival_speed_m_s'], self.plan['dwell_s'])
@@ -35,7 +50,15 @@ class Tracker(Node):
         self.csv = csv.writer(self.stream)
         self.csv.writerow(['sim_s', 'waypoint_index', 'x', 'y', 'z', 'target_x', 'target_y',
                            'target_z', 'distance_m', 'speed_m_s', 'roll_rad', 'pitch_rad',
-                           'yaw_rad', 'max_abs_thrust_N', 'allocation_residual'])
+                           'yaw_rad', 'max_abs_thrust_N', 'allocation_residual',
+                           'policy_seq', 'accel_world_x', 'accel_world_y', 'accel_world_z'])
+        self.policy_stream = (self.output/'policy.jsonl').open('x', encoding='utf-8')
+        self.observation_publisher = self.create_publisher(String, '/auv_0/policy/observation', 10)
+        self.acceleration_publisher = self.create_publisher(String, '/auv_0/reference/acceleration', 10)
+        self.action_subscription = None
+        if self.policy_mode == 'external':
+            self.action_subscription = self.create_subscription(
+                String, '/auv_0/policy/action', self.on_action, 10)
         self.publishers_ = [self.create_publisher(Float64, f'/auv_0/thruster_{i}/cmd_thrust', 10)
                             for i in range(8)]
         self.subscription = self.create_subscription(Odometry, '/auv_0/odom', self.on_state,
@@ -57,7 +80,27 @@ class Tracker(Node):
         self.saturated = 0
         self.reason = 'interrupted'
         self.finished = False
-        self.get_logger().info('Waiting for /clock and /auv_0/odom. Truth feedback; zero current.')
+        self.get_logger().info(f'Policy={self.policy_mode}, period={self.policy.period}s. '
+                               'Waiting for /clock and /auv_0/odom. Truth feedback; zero current.')
+
+    def journal(self, event, payload):
+        self.policy_stream.write(json.dumps({'event': event, **payload}, allow_nan=False)+'\n')
+        self.policy_stream.flush()
+
+    def on_action(self, message):
+        if self.finished:
+            return
+        try:
+            packet = json.loads(message.data)
+            now = self.get_clock().now().nanoseconds*1e-9
+            accepted = self.policy.accept_external(packet, now)
+            if accepted:
+                self.journal('action', {'seq': packet['seq'], 'sim_s': now,
+                                       'diagnostics': self.policy.last_diagnostics})
+        except (ValueError, TypeError, KeyError, TimeoutError) as error:
+            self.get_logger().error(str(error))
+            self.reason = 'invalid_or_expired_external_action'
+            self.finished = True
 
     def on_state(self, msg):
         if msg.header.frame_id != 'map' or msg.child_frame_id != 'auv_0/base_link':
@@ -85,6 +128,9 @@ class Tracker(Node):
             self.finished = True
             return
         if self.start_sim is None:
+            if self.policy_mode == 'external' and self.observation_publisher.get_subscription_count() == 0:
+                self.publish(np.zeros(8))
+                return
             self.start_sim = self.last_sim = stamp
             self.last_position = position.copy()
             return
@@ -124,7 +170,30 @@ class Tracker(Node):
             self.get_logger().info('All waypoints reached. Beginning 10 s final station keeping.')
         target = self.sequence.target
         distance = float(np.linalg.norm(target-position))
-        forces, residual = self.control.step(position, q, velocity, rates, target, dt)
+        context = TaskContext(waypoint_progress=self.sequence.accepted/len(self.sequence.points),
+                              hold_progress=min(1., self.sequence.dwell/self.sequence.dwell_s))
+        try:
+            started = time.monotonic()
+            packet = self.policy.update(stamp, position, q, velocity, target, context)
+            if time.monotonic()-started > self.policy.timeout:
+                raise TimeoutError('Local inference exceeded wall-time budget')
+            if packet is not None:
+                self.observation_publisher.publish(String(data=json.dumps(packet, allow_nan=False)))
+                self.journal('observation', packet)
+                if self.policy_mode != 'external':
+                    self.journal('action', {'seq': packet['seq'], 'sim_s': stamp,
+                                           'diagnostics': self.policy.last_diagnostics})
+            acceleration = self.policy.acceleration_world
+            forces, residual = self.control.execute_acceleration(acceleration, q, velocity, rates, dt)
+        except (ValueError, RuntimeError, TimeoutError) as error:
+            self.get_logger().error(str(error))
+            self.reason = 'policy_or_actuator_failure'
+            self.finished = True
+            self.publish(np.zeros(8))
+            return
+        self.acceleration_publisher.publish(String(data=json.dumps(
+            {'schema': 'crk.acceleration3.v1', 'sim_s': stamp, 'frame': 'map',
+             'seq': self.policy.sequence, 'acceleration_m_s2': acceleration.tolist()}, allow_nan=False)))
         self.publish(forces)
         maximum = float(np.max(np.abs(forces)))
         self.max_force = max(self.max_force, maximum)
@@ -137,7 +206,7 @@ class Tracker(Node):
                 self.finished = True
         if elapsed-self.last_logged >= 0.1:
             self.csv.writerow([elapsed, self.sequence.index, *position, *target, distance, speed,
-                               *angles, maximum, residual])
+                               *angles, maximum, residual, self.policy.sequence, *acceleration])
             self.stream.flush()
             self.last_logged = elapsed
         if elapsed-self.last_printed >= 1.:
@@ -152,9 +221,10 @@ class Tracker(Node):
             self.publish(np.zeros(8))
             time.sleep(0.02)
         self.stream.close()
+        self.policy_stream.close()
         rms = float(np.sqrt(np.mean(np.square(self.final_errors)))) if self.final_errors else None
         summary = {
-            'schema': 'crk.singleboat.runtime.v1', 'termination_reason': self.reason,
+            'schema': 'crk.singleboat.runtime.v2', 'termination_reason': self.reason,
             'all_waypoints_accepted': self.sequence.completed,
             'waypoints_accepted': self.sequence.accepted, 'waypoints_total': len(self.sequence.points),
             'simulation_elapsed_s': None if self.start_sim is None else self.last_sim-self.start_sim,
@@ -168,6 +238,12 @@ class Tracker(Node):
             'model_status': self.config['model_status'],
             'not_a_thesis_mission_success_metric': True,
             'vehicle_config': self.config, 'waypoint_config': self.plan}
+        summary.update({'policy_mode': self.policy_mode, 'policy_config': self.policy_config,
+                        'policy_decisions': self.policy.sequence,
+                        'accepted_actions': self.policy.accepted_actions,
+                        'rejected_actions': self.policy.rejected_actions,
+                        'actor_metadata': self.actor_metadata,
+                        'checkpoint_compatibility_verified': False})
         (self.output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
         self.get_logger().info(f'Result: {self.reason}; saved to {self.output}')
 

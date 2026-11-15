@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT/'src/crk_auv_demo'
 sys.path.insert(0, str(PACKAGE))
 from crk_auv_demo.core import ControlLaw, WaypointSequence, allocation_matrix, rotation
+from crk_auv_demo.policy import PolicyPipeline, TaskContext
 
 C = json.loads((PACKAGE/'config/vehicle.json').read_text())
 PLAN = json.loads((PACKAGE/'config/waypoints.json').read_text())
@@ -54,6 +55,7 @@ class DesignChecks(unittest.TestCase):
 
     def test_reduced_six_dof_closed_loop(self):
         law = ControlLaw(C)
+        policy = PolicyPipeline(json.loads((PACKAGE/'config/policy_demo.json').read_text()))
         seq = WaypointSequence(PLAN['points'])
         p = np.array([0., 0., -2.])
         q = np.array([0.05, -0.025, 0.1, 1.])
@@ -71,7 +73,8 @@ class DesignChecks(unittest.TestCase):
         completion = None
         for k in range(8000):
             seq.update(p, np.linalg.norm(v), .02)
-            forces, _ = law.step(p, q, v, w, seq.target, .02)
+            policy.update(k*.02, p, q, v, seq.target, TaskContext())
+            forces, _ = law.execute_acceleration(policy.acceleration_world, q, v, w, .02)
             wrench = law.B @ forces
             for _ in range(10):
                 dt = .002

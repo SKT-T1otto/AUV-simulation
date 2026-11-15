@@ -1,0 +1,20 @@
+{
+  "profile_id": "reference_search_balanced_defaults_v1",
+  "checkpoint_compatible": false,
+  "role_index": 1,
+  "decision_period_s": 0.2,
+  "action_timeout_s": 0.15,
+  "world_to_policy_rotation": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+  "world_to_policy_translation_m": [5, 5, 5],
+  "v_xy_max": 2.2,
+  "v_z_max": 1.0,
+  "a_xy_max": 1.0,
+  "a_z_max": 0.7,
+  "prior_kv_xy": 1.1,
+  "prior_kv_z": 1.0,
+  "prior_slow_radius_xy": 2.4,
+  "prior_slow_radius_z": 1.2,
+  "use_residual_prior": true,
+  "prior_strength": 1.0,
+  "residual_scale": 0.45
+}

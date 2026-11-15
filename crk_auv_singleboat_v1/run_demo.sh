@@ -20,13 +20,14 @@ printf 'One command starts Gazebo, clock/odometry/thrust bridges and controller.
 GZ_PID=''
 BRIDGE_PID=''
 CONTROLLER_PID=''
+ACTOR_PID=''
 cleanup() {
   trap - EXIT INT TERM
   if [ -n "$CONTROLLER_PID" ] && kill -0 "$CONTROLLER_PID" 2>/dev/null; then
     kill -INT "$CONTROLLER_PID" 2>/dev/null || true
     wait "$CONTROLLER_PID" 2>/dev/null || true
   fi
-  for PID in "$BRIDGE_PID" "$GZ_PID"; do
+  for PID in "$ACTOR_PID" "$BRIDGE_PID" "$GZ_PID"; do
     if [ -n "$PID" ]; then
       kill -INT "$PID" 2>/dev/null || true
     fi
@@ -43,10 +44,32 @@ BRIDGE_EXE="$(ros2 pkg prefix ros_gz_bridge)/lib/ros_gz_bridge/parameter_bridge"
 "$BRIDGE_EXE" --ros-args -p config_file:="$SHARE/config/bridge.yaml" > "$RUN_DIR/bridge.log" 2>&1 &
 BRIDGE_PID=$!
 sleep 2
+POLICY_MODE="${CRK_POLICY_MODE:-zero}"
+POLICY_FILE="${CRK_POLICY_FILE:-$SHARE/config/policy_demo.json}"
+if [ "${CRK_EXTERNAL_ZERO:-0}" = 1 ]; then
+  if [ "$POLICY_MODE" != external ]; then
+    printf 'CRK_EXTERNAL_ZERO=1 requires CRK_POLICY_MODE=external\n' >&2
+    exit 1
+  fi
+  "$(ros2 pkg prefix crk_auv_demo)/lib/crk_auv_demo/external_zero_actor" \
+    --ros-args -p use_sim_time:=true > "$RUN_DIR/actor.log" 2>&1 &
+  ACTOR_PID=$!
+fi
 CONTROLLER_EXE="$(ros2 pkg prefix crk_auv_demo)/lib/crk_auv_demo/controller"
-"$CONTROLLER_EXE" --ros-args -p use_sim_time:=true -p output_dir:="$RUN_DIR" &
+CONTROLLER_ARGS=(--ros-args -p use_sim_time:=true -p "output_dir:=$RUN_DIR"
+  -p "policy_mode:=$POLICY_MODE" -p "policy_file:=$POLICY_FILE")
+if [ "$POLICY_MODE" = torchscript ]; then
+  if [ -z "${CRK_ACTOR_PATH:-}" ] || [ -z "${CRK_ACTOR_METADATA_PATH:-}" ]; then
+    printf 'TorchScript mode requires CRK_ACTOR_PATH and CRK_ACTOR_METADATA_PATH\n' >&2
+    exit 1
+  fi
+  CONTROLLER_ARGS+=(-p "actor_path:=$CRK_ACTOR_PATH" -p "actor_metadata_path:=$CRK_ACTOR_METADATA_PATH")
+fi
+"$CONTROLLER_EXE" "${CONTROLLER_ARGS[@]}" &
 CONTROLLER_PID=$!
 STATUS=0
-wait -n "$GZ_PID" "$BRIDGE_PID" "$CONTROLLER_PID" || STATUS=$?
+PIDS=("$GZ_PID" "$BRIDGE_PID" "$CONTROLLER_PID")
+if [ -n "$ACTOR_PID" ]; then PIDS+=("$ACTOR_PID"); fi
+wait -n "${PIDS[@]}" || STATUS=$?
 printf '\nProcess finished (exit %s). Results: %s\n' "$STATUS" "$RUN_DIR"
 exit "$STATUS"

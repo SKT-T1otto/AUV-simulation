@@ -20,10 +20,6 @@
     {"position": [-0.25, -0.2, 0.0], "direction": [0.0, 0.0, 1.0]}
   ],
   "control": {
-    "position_gain": 0.7,
-    "velocity_gain": 2.0,
-    "speed_limit_m_s": 0.35,
-    "accel_limit_m_s2": 0.6,
     "attitude_gain": [5.0, 5.0, 3.0],
     "rate_gain": [2.0, 2.0, 1.5],
     "motor_time_constant_s": 0.12,
