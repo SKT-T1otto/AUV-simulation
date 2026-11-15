@@ -1,0 +1,13 @@
+**/__pycache__/
+**/*.pyc
+**/build/
+**/install/
+**/log/
+**/results/
+
+# Reproducible delivery archives and machine-local workspace audit records.
+/crk_auv_singleboat_v1.tar.gz
+/crk_auv_singleboat_v1.zip
+/SINGLEBOAT_CREATED_FILES.json
+/verification/
+/tools/verify_legacy_unchanged.py
