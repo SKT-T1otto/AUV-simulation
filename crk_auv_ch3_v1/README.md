@@ -2,9 +2,11 @@
 
 The implementation plan and gate status are in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 Current delivery contains G1 contracts/source identity, G2 scene/frame conversion,
-and the G3 **static scene preview**. It does not run a search mission or a physical AUV.
-No models/checkpoints have been loaded. G4 and later modules are not implemented;
-they must wait for the Linux/GUI G3 gate to pass.
+the accepted G3 static scene preview and the new G4 four-vehicle motion/control test.
+G3 passed user Linux SDF/loading checks and visual confirmation on 2026-11-16.
+See [G4_MOTION.md](G4_MOTION.md) for the moving-vehicle entry point and parameter provenance.
+G4 local checks pass, but Linux motion acceptance is pending. G5 and later mission/map/
+learning modules are not implemented and must wait for G4. No checkpoints are loaded.
 
 ## Local verification
 

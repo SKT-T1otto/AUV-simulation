@@ -1,0 +1,50 @@
+{
+  "schema": "crk.g4.vehicle.v1",
+  "profile_id": "bluerov2_heavy_literature_port_v1",
+  "reference_platform": "BlueROV2 Heavy, a tethered ROV; not a validated AUV digital twin",
+  "model_status": "Literature-parameter Gazebo engineering port; no real-vehicle validation",
+  "sources": {
+    "dynamics": "https://doi.org/10.3390/jmse10121898 Appendix A Table A1",
+    "dimensions": "https://bluerobotics.com/learn/technical-reference/",
+    "propeller": "https://bluerobotics.com/store/thrusters/t100-t200-thrusters/t200-thruster-r2-rp/"
+  },
+  "source_frame": "FRD",
+  "body_frame": "FLU",
+  "mass_kg": 13.5,
+  "volume_m3": 0.0134,
+  "density_kg_m3": 1000.0,
+  "gravity_m_s2": 9.82,
+  "inertia_kg_m2": [0.26, 0.23, 0.37],
+  "center_of_buoyancy_flu_m": [0, 0, 0.01],
+  "visual_extent_m": [0.457, 0.575, 0.254],
+  "horizontal_position_frd_m": [0.156, 0.111, 0.085],
+  "horizontal_position_angles_rad": [0, 5.05, 1.91, 3.141592653589793],
+  "horizontal_direction_angles_rad": [0, 1.5707963267948966, 2.356194490192345, 3.141592653589793],
+  "vertical_position_frd_m": [0.12, 0.218, 0],
+  "vertical_position_angles_rad": [0, 4.15, 1.01, 3.141592653589793],
+  "linear_drag": [13.7, 0, 33, 0, 0.8, 0],
+  "quadratic_drag": [141, 217, 190, 1.19, 0.47, 1.5],
+  "added_mass": [6.36, 7.12, 18.68, 0.189, 0.135, 0.222],
+  "propeller_diameter_m": 0.076,
+  "rotor_link_mass_kg": 0.02,
+  "rotor_link_inertia_kg_m2": 0.00002,
+  "test_thrust_limit_N": 15.0,
+  "control": {
+    "position_gain": 0.9,
+    "velocity_gain": 1.2,
+    "speed_limit_m_s": 0.35,
+    "acceleration_limit_m_s2": 0.45,
+    "attitude_gain": [4, 4, 2],
+    "rate_gain": [1.5, 1.5, 1.0],
+    "motor_time_constant_s": 0.12,
+    "thrust_slew_N_s": 50.0
+  },
+  "engineering_approximations": [
+    "Displacement volume represented by one collision box at the buoyancy center; exterior is simplified visual geometry, not CAD collision geometry.",
+    "Rotor masses/inertias are numerical joint components; total mass/CG/inertia are corrected to the literature values.",
+    "Rounded installation angles and the horizontal direction angles are transcribed from Table A1, including its 3pi/4 third angle; do not treat them as verified manufacturer CAD.",
+    "15 N symmetric derated test envelope, 0.12 s lag, slew limit and controller gains are engineering test choices, not identified manufacturer curves.",
+    "Gazebo Newton-command thrusters use a nominal 0.01 thrust coefficient for angular-speed conversion; no validated PWM, RPM, propeller reaction torque or power curve.",
+    "No tether, flow, sensor noise, battery or thrust-interaction model; this is not a reproduction of all paper experiments."
+  ]
+}

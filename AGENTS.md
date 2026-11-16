@@ -12,4 +12,5 @@
 - For Chapter 3 integration, follow `crk_auv_ch3_v1/IMPLEMENTATION_PLAN.md` in order.
   Validate each new module before implementing a dependent module. A pending Linux
   or GUI gate requires actual evidence; local XML/unit tests cannot satisfy it.
-  Current G3 is pending Linux/GUI validation. G4+ must not be implemented until it passes.
+  G3 passed Linux SDF/loading validation and user visual confirmation on 2026-11-16.
+  G4 motion/control is authorized. G5+ must wait for real Linux G4 evidence.
