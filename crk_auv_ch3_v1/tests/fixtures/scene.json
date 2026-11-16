@@ -1,0 +1,21 @@
+{
+  "purpose": "engineering_fixture_not_thesis_scenario",
+  "protocol": "ch3_unknown_map_v1",
+  "scenario_id": "engineering_layout_only_001",
+  "scenario_profile": "M20_MOVING_UNKNOWN_MULTI",
+  "scenario_seed": 1,
+  "map_sharing_mode": "central_shared_deterministic_v1",
+  "obstacle_knowledge_mode": "online_unknown",
+  "initial_agent_positions": [[2, 2, 2], [2, 6, 3], [2, 10, 4], [2, 14, 2]],
+  "initial_executor_wait_point": [3, 14, 2],
+  "target_position": [16, 16, 4],
+  "target_initial_position": [16, 16, 4],
+  "target_initial_velocity": [0.3, 0, 0],
+  "target_motion_mode": "constant_velocity_reflect_v1",
+  "obstacle_layout_id": "custom_aabb_v1",
+  "obstacle_count": 2,
+  "obstacles": [
+    {"center": [8, 6, 4], "size": [2, 3, 2]},
+    {"center": [13, 12, 4], "size": [2, 2, 3]}
+  ]
+}

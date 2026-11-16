@@ -1,0 +1,21 @@
+{
+  "schema": "crk.ch3.bootstrap.v1",
+  "roles": ["search_fast", "search_balanced", "search_precise", "executor"],
+  "observation_dim": 28,
+  "action_dim": 3,
+  "method": "ZERO",
+  "map_version": "original_d2",
+  "checkpoint": null,
+  "profile": "M20_MOVING_UNKNOWN_MULTI",
+  "task_protocol": "collision_terminal_v1",
+  "task_dt_s": 0.2,
+  "control_dt_s": 0.02,
+  "physics_dt_s": 0.002,
+  "max_steps": 400,
+  "map_sharing": "central_shared_deterministic_v1",
+  "handoff": "fixed_reliable_one_step_v1",
+  "obstacle_sensor_noise_std": 0.0,
+  "training_enabled": false,
+  "motion_authority": "gazebo",
+  "world_mode": "synchronous"
+}

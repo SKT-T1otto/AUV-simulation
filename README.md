@@ -11,6 +11,8 @@ Gazebo 负责运动积分；Python 节点只计算控制指令和记录指标。
 ## 入口
 
 - `crk_auv_singleboat_v1/`：Linux ROS 2 工作空间，含单艇模型、控制器、测试和运行脚本。
+- `crk_auv_ch3_v1/`：第三章分阶段改造；目前仅有来源/接口、坐标/场景适配与静态布局预览。
+- `crk_auv_ch3_v1/IMPLEMENTATION_PLAN.md`：各阶段验收条件和当前进度；下一关需要 Linux Gazebo 验证。
 - `crk_auv_singleboat_v1/README_zh.md`：安装、运行、验收和问题定位说明。
 - `tools/run_linux.sh`：宿主机启动入口，配置目录挂载并直接保存结果。
 - `crk_auv_singleboat_v1/HOST_OUTPUT.md`：`/home/legion/AUV-simulation` 的一次性配置与日常运行。

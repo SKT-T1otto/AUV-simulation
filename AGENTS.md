@@ -9,3 +9,7 @@
   X11 authentication files, local Docker state, or checkpoints to Git without an explicit request.
 - The current vehicle is an uncalibrated engineering demonstrator. Storage changes
   must not change physics, observations, actions, rewards, or mission criteria.
+- For Chapter 3 integration, follow `crk_auv_ch3_v1/IMPLEMENTATION_PLAN.md` in order.
+  Validate each new module before implementing a dependent module. A pending Linux
+  or GUI gate requires actual evidence; local XML/unit tests cannot satisfy it.
+  Current G3 is pending Linux/GUI validation. G4+ must not be implemented until it passes.

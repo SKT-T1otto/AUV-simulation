@@ -4,14 +4,17 @@ import json
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
-SOURCE = PROJECT/'crk_auv_singleboat_v1'
 EXCLUDED = {'.git', '__pycache__', 'build', 'install', 'log', 'results'}
-files = sorted(p for p in SOURCE.rglob('*') if p.is_file()
-               and not EXCLUDED.intersection(p.relative_to(SOURCE).parts)
-               and p.suffix != '.pyc' and p.name != 'SHA256SUMS')
-manifest = '\n'.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.relative_to(SOURCE).as_posix()
-                     for p in files)+'\n'
-(SOURCE/'SHA256SUMS').write_text(manifest, encoding='utf-8', newline='\n')
+count = 0
+for workspace in ('crk_auv_singleboat_v1', 'crk_auv_ch3_v1'):
+    source = PROJECT/workspace
+    files = sorted(p for p in source.rglob('*') if p.is_file()
+                   and not EXCLUDED.intersection(p.relative_to(source).parts)
+                   and p.suffix != '.pyc' and p.name != 'SHA256SUMS')
+    manifest = '\n'.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.relative_to(source).as_posix()
+                         for p in files)+'\n'
+    (source/'SHA256SUMS').write_text(manifest, encoding='utf-8', newline='\n')
+    count += len(files)
 inventory = [{'path': p.relative_to(PROJECT).as_posix(),
               'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
              for p in sorted(PROJECT.rglob('*')) if p.is_file()
@@ -20,4 +23,4 @@ inventory = [{'path': p.relative_to(PROJECT).as_posix(),
 inventory.append({'path': 'SINGLEBOAT_CREATED_FILES.json', 'sha256': None,
                   'note': 'Self record without recursive self hash.'})
 (PROJECT/'SINGLEBOAT_CREATED_FILES.json').write_text(json.dumps(inventory, indent=2)+'\n', encoding='utf-8')
-print(f'Recorded {len(files)} source checksums; no archives generated.')
+print(f'Recorded {count} source checksums in two workspaces; no archives generated.')
