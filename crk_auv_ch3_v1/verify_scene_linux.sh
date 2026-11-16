@@ -7,7 +7,17 @@ if [ -f /.dockerenv ] && ! mountpoint -q "$OUTPUT_ROOT"; then
   printf 'Host result root is not mounted. Use tools/run_ch3_scene_check.sh on the host.\n' >&2
   exit 1
 fi
-command -v gz >/dev/null || { printf 'Gazebo is missing. Run in the configured container.\n' >&2; exit 1; }
+# Each docker exec starts a new process: setup sourced by the build subprocess
+# does not initialize PATH or vendor library/plugin hooks in this shell.
+if [ ! -f /opt/ros/jazzy/setup.bash ]; then
+  printf 'ROS 2 Jazzy setup is missing: /opt/ros/jazzy/setup.bash\n' >&2
+  exit 1
+fi
+source /opt/ros/jazzy/setup.bash
+command -v gz >/dev/null || {
+  printf 'ROS 2 Jazzy was sourced, but gz is unavailable. Check ros-jazzy-ros-gz in this container.\n' >&2
+  exit 1
+}
 OWNER=''
 if [ "$(id -u)" = 0 ]; then
   if ! [[ "${CRK_OUTPUT_UID:-}" =~ ^[0-9]+$ && "${CRK_OUTPUT_GID:-}" =~ ^[0-9]+$ ]]; then

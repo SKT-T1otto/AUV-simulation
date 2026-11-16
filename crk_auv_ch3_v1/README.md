@@ -34,6 +34,11 @@ The host wrapper reuses/configures crk-ros2-home and its output bind mount. It d
 not start the single-vehicle controller. It runs all three sets of tests, generates
 a new preview and invokes `gz sdf -k`, saving the exit code and output before opening
 Gazebo. Without --gui, only the validation and export are performed.
+The validation script explicitly sources `/opt/ros/jazzy/setup.bash` in its own
+shell before looking up gz, so ROS-vendored executable/library/plugin paths are
+available. Setup loaded by a previous build subprocess is not inherited by a
+subsequent docker exec. Missing ROS setup and missing gz after setup have separate
+error messages; a previous successful build does not require reinstalling Gazebo.
 
 Expected: four static colored box markers (three search roles and an executor),
 two brown obstacles, a yellow target marker and a cyan standby marker. Whole native
