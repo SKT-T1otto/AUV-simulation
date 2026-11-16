@@ -105,7 +105,9 @@ class MotionNode(Node):
             nonlocal result
             if self.clock_ns > target+PHYSICS_NS:
                 raise RuntimeError('World advanced outside lockstep; do not press Play')
-            if self.clock_ns >= target-PHYSICS_NS:
+            # Do not consume a one-substep-old sample until the whole requested
+            # step batch has completed; otherwise the next request could overlap it.
+            if self.clock_ns >= target:
                 result = self.buffer.take(target, PHYSICS_NS)
             return result is not None
         self.wait(ready, 10., f'Clock/four-state barrier timeout at {target}; clock={self.clock_ns}')

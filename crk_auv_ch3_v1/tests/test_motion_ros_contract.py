@@ -89,3 +89,16 @@ class RosContractTests(unittest.TestCase):
         node.publishers_[0][0].wait_for_all_acked = lambda _: False
         with self.assertRaises(TimeoutError):
             node.publish(values)
+
+    def test_step_does_not_complete_one_physics_substep_early(self):
+        node = self.node()
+        node.clock_ns = 40_000_000
+        node.buffer = TeamStateBuffer()
+        def not_finished(_):
+            node.clock_ns = 58_000_000
+            for i in range(4):
+                node.buffer.push(i, BodyState(58_000_000, (i, 0, 0), (0, 0, 0, 1), (0, 0, 0), (0, 0, 0)),
+                                 child_frame=f'auv_{i}/base_link')
+        node.control_world = not_finished
+        with self.assertRaises(TimeoutError):
+            node.step(10)
