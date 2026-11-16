@@ -70,3 +70,24 @@ class SupervisorTests(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertFalse(summary['engineering_acceptance_passed'])
             self.assertIn('without a valid acceptance summary', summary['error'])
+
+    def test_crashed_process_is_named_before_cleanup_of_other_processes(self):
+        class FakeProcess:
+            def __init__(self, log):
+                self.pid = 999999
+                self.returncode = 134 if log == 'gazebo.log' else None
+                self.stdout = io.StringIO('probe controller running\n')
+            def poll(self):
+                return self.returncode
+            def wait(self, timeout=None):
+                self.returncode = -2
+                return self.returncode
+        with tempfile.TemporaryDirectory() as directory:
+            def spawn(command, **kwargs):
+                log = getattr(kwargs['stdout'], 'name', 'controller.log')
+                return FakeProcess(Path(log).name if isinstance(log, str) else 'controller.log')
+            status, summary = self.run_mocked(Path(directory), 0, spawn)
+            self.assertEqual(status, 1)
+            self.assertIn('gazebo.log (exit 134)', summary['error'])
+            self.assertEqual(summary['failed_processes'], [dict(log='gazebo.log', exit_code=134)])
+            self.assertFalse(summary['engineering_acceptance_passed'])

@@ -14,7 +14,43 @@ class MotionWorldTests(unittest.TestCase):
         self.p = load_profile()
         self.scene = json.loads((ROOT/'tests/fixtures/scene.json').read_text())
         xml, self.truth = build_motion_world(self.scene, self.p)
-        self.world = ET.fromstring(xml).find('world')
+        self.sdf = ET.fromstring(xml)
+        self.world = self.sdf.find('world')
+
+    def test_added_mass_is_native_positive_and_applied_once(self):
+        self.assertEqual(self.sdf.get('version'), '1.11')
+        self.assertEqual(self.world.findtext("plugin[@name='gz::sim::systems::Physics']/engine/filename"),
+                         'gz-physics-dartsim-plugin')
+        self.assertEqual(self.p['added_mass_mode'], 'dart_native_implicit')
+        for i in range(4):
+            model = self.world.find(f"model[@name='auv_{i}']")
+            matrices = model.findall('.//fluid_added_mass')
+            self.assertEqual(len(matrices), 1)
+            matrix = model.find("link[@name='base_link']/inertial/fluid_added_mass")
+            np.testing.assert_allclose([float(matrix.findtext(tag)) for tag in
+                                       ('xx', 'yy', 'zz', 'pp', 'qq', 'rr')], self.p['added_mass'])
+            hydro = model.find("plugin[@name='gz::sim::systems::Hydrodynamics']")
+            self.assertEqual(hydro.findtext('disable_added_mass'), 'true')
+            self.assertEqual(hydro.findtext('disable_coriolis'), 'true')
+            self.assertFalse(any('Dot' in node.tag for node in hydro))
+            for axis, velocity, linear, quadratic in zip('xyzkmn', 'UVWPQR', self.p['linear_drag'],
+                                                        self.p['quadratic_drag']):
+                self.assertEqual(float(hydro.findtext(axis+velocity)), -linear)
+                self.assertEqual(float(hydro.findtext(axis+velocity+'abs'+velocity)), -quadratic)
+
+    def test_heave_added_mass_exposes_legacy_explicit_instability(self):
+        # Isolated added-inertia recurrence used by the old plugin:
+        # m*a[n] = F - ma*a[n-1]. Even constant small force excites its
+        # alternating error when ma/m > 1. This is not a Gazebo runtime test.
+        mass, added, force, dt = self.p['mass_kg'], self.p['added_mass'][2], .1, .002
+        self.assertGreater(added/mass, 1)
+        acceleration, velocity = 0., 0.
+        for _ in range(50):
+            acceleration = (force-added*acceleration)/mass
+            velocity += acceleration*dt
+        self.assertGreater(abs(velocity), 1)
+        native_velocity = 50*dt*force/(mass+added)
+        self.assertLess(native_velocity, .001)
 
     def test_four_dynamic_vehicles_have_32_real_thrust_plugins(self):
         self.assertEqual(self.world.get('name'), WORLD)

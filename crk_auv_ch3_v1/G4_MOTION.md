@@ -61,7 +61,16 @@ bash /home/legion/AUV-simulation/source/tools/run_ch3_motion.sh --headless
 已移除旧示例的安装中心重合问题，控制矩阵由安装位置/方向计算；
 基体质量、质心及惯量扣除八个数值转子部件的贡献，以保持整艇参数一致。
 排水体积由单一碰撞盒表示，浮心位于重心上方 0.01 m。外观和碰撞几何是简化近似。
-水动力使用负 SNAME 导数，附加质量只配置一次；重力取参考参数值 9.82 m/s²。
+阻尼使用负 SNAME 导数；附加质量使用正的物理值，在 SDFormat 1.11 的
+`base_link/inertial/fluid_added_mass` 中配置，并指定 DART 物理引擎。
+DART 将其与刚体惯性联合求解；Hydrodynamics 只计算阻尼，关闭旧式附加质量和科氏项，
+不再写入 `xDotU` 等旧字段，避免重复计算。当前零海流下的附加质量科氏项由 DART 处理。
+重力取参考参数值 9.82 m/s²；不把附加质量算作额外艇重或排水体积。
+
+2026-11-16 的旧 v1 接入曾在启动后触发 ODE 碰撞断言。该版本采用插件根据上一子步
+加速度施力的显式附加质量方式，垂向附加质量 18.68 kg 大于刚体质量 13.5 kg，
+存在数值发散风险。v2 改为官方推荐的原生惯性方式，保留全部文献物理数值和控制判据。
+本地回归复现了孤立显式递推的发散并检查新 SDF，但修复后的真实 Gazebo 验收仍须 Linux 重跑。
 
 15 N 对称降额推力边界、0.12 s 执行器一阶响应、变化率和控制增益是工程测试设定。
 使用 Gazebo 牛顿推力命令，不宣称有真实 PWM/转速/功耗映射；推力系数仅作名义转速换算。
@@ -118,6 +127,10 @@ engineering_acceptance_passed=true，且 phases 中七阶段均 passed=true。
 这些是 G4 工程测试判据，不替换论文任务成功规则。
 
 异常必须保留 error、日志和失败摘要；不会以零进程退出码替代成功判据。
+基础进程提前退出时，摘要增加 `failed_processes`，记录清理前已退出的日志文件与退出码；
+终端直接显示对应日志末尾。停止其他进程产生的 SIGINT 不作为根因。
+修复版结果还应包含 `model_profile=bluerov2_heavy_literature_port_v2`、
+`added_mass_mode=dart_native_implicit`，便于区分旧失败记录。
 mission_executed、map_executed、checkpoint_loaded、performance_claim 始终为 false。
 与 G3 不同，这次 motion_started 应在实际收到推进后的反馈时变为 true。
 
@@ -127,6 +140,9 @@ mission_executed、map_executed、checkpoint_loaded、performance_claim 始终�
 - [Jazzy WorldControl](https://github.com/gazebosim/ros_gz/blob/jazzy/ros_gz_interfaces/msg/WorldControl.msg)
 - [Gazebo Thruster](https://gazebosim.org/api/sim/8/classgz_1_1sim_1_1systems_1_1Thruster.html)
 - [Gazebo OdometryPublisher](https://github.com/gazebosim/gz-sim/blob/gz-sim8/src/systems/odometry_publisher/OdometryPublisher.cc)
+- [Harmonic 原生附加质量与阻尼示例](https://gazebosim.org/api/sim/8/adding_system_plugins.html)
+- [Gazebo 附加质量迁移说明](https://github.com/gazebosim/gz-sim/blob/main/Migration.md)
+- [DART 对原生附加质量与刚体重力的处理](https://github.com/gazebosim/gz-physics/blob/gz-physics7/dartsim/src/SimulationFeatures.cc)
 
 本地验证包含独立控制/分配、质量惯量配平、SDF/话题一致性、状态屏障、实际客户端方法的
 ROS 替身测试、监督进程错误处理，以及有限简化六自由度回归。

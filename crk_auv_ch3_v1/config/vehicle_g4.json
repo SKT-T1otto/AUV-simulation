@@ -1,6 +1,7 @@
 {
   "schema": "crk.g4.vehicle.v1",
-  "profile_id": "bluerov2_heavy_literature_port_v1",
+  "profile_id": "bluerov2_heavy_literature_port_v2",
+  "added_mass_mode": "dart_native_implicit",
   "reference_platform": "BlueROV2 Heavy, a tethered ROV; not a validated AUV digital twin",
   "model_status": "Literature-parameter Gazebo engineering port; no real-vehicle validation",
   "sources": {

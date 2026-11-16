@@ -43,8 +43,12 @@ def build_motion_world(scene, profile, frame=Frame()):
     allocation(profile)
     xml, truth = build_preview(scene, frame)
     sdf = ET.fromstring(xml)
+    # Native fluid_added_mass is part of SDFormat 1.11 (Harmonic / sdformat14).
+    sdf.set('version', '1.11')
     world = sdf.find('world')
     world.set('name', WORLD)
+    physics = world.find("plugin[@name='gz::sim::systems::Physics']")
+    child(child(physics, 'engine'), 'filename', 'gz-physics-dartsim-plugin')
     world.find('gravity').text = f"0 0 -{profile['gravity_m_s2']}"
     for model in list(world.findall('model')):
         if model.get('name').startswith('auv_'):
@@ -63,6 +67,12 @@ def build_motion_world(scene, profile, frame=Frame()):
         child(model, 'pose', ' '.join(map(str, (*position, 0, 0, 0))))
         base = child(model, 'link', name='base_link')
         inertial(base, mb, cg, ib)
+        # Positive physical added inertia, integrated by DART with rigid inertia.
+        # Legacy hydrodynamics *Dot* terms instead use lagged acceleration and
+        # diverge for this profile's heave added-mass / rigid-mass ratio > 1.
+        added = child(base.find('inertial'), 'fluid_added_mass')
+        for axis, mass in zip(('xx', 'yy', 'zz', 'pp', 'qq', 'rr'), profile['added_mass']):
+            child(added, axis, mass)
         collision = child(base, 'collision', name='displacement_hull')
         cb = profile['center_of_buoyancy_flu_m']
         child(collision, 'pose', ' '.join(map(str, (*cb, 0, 0, 0))))
@@ -97,11 +107,14 @@ def build_motion_world(scene, profile, frame=Frame()):
         hydro = plugin(model, 'hydrodynamics', 'Hydrodynamics')
         child(hydro, 'link_name', 'base_link')
         child(hydro, 'default_current', '0 0 0')
-        for axis, velocity, linear, quadratic, mass in zip('xyzkmn', 'UVWPQR', profile['linear_drag'],
-                                                         profile['quadratic_drag'], profile['added_mass']):
+        child(hydro, 'disable_added_mass', 'true')
+        # Native DART inertia supplies added-mass Coriolis as well. Do not apply
+        # the legacy plugin's Coriolis a second time (zero current in G4).
+        child(hydro, 'disable_coriolis', 'true')
+        for axis, velocity, linear, quadratic in zip('xyzkmn', 'UVWPQR', profile['linear_drag'],
+                                                    profile['quadratic_drag']):
             child(hydro, axis+velocity, -linear)
             child(hydro, axis+velocity+'abs'+velocity, -quadratic)
-            child(hydro, axis+'Dot'+velocity, -mass)
         odom = plugin(model, 'odometry-publisher', 'OdometryPublisher')
         for key, value in {'dimensions': 3, 'odom_frame': 'map', 'robot_base_frame': name+'/base_link',
                            'odom_publish_frequency': 50, 'odom_topic': '/model/'+name+'/odometry'}.items():

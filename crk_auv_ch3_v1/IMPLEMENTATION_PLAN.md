@@ -10,7 +10,7 @@ Local tests do not establish ROS/Gazebo acceptance or research performance.
 | G1 | Experiment and source contracts | Valid/invalid config tests, integral time steps, no checkpoint loading | Local checks passed: 3 tests; 248 source files locked |
 | G2 | Coordinates and native scene inputs | Round trips, scene consistency, negative cases, no information sent to actor | Local checks passed: 4 tests |
 | G3 | Static Gazebo scene preview | XML tests, Linux `gz sdf -k`, visual inspection of four role markers and obstacles | Passed: user Linux log and visual confirmation, 2026-11-16 |
-| G4 | Physical AUV and synchronous world stepping | Model provenance/geometry checks, Linux plugins, four-state barrier, actuator signs | Implemented with literature ROV reference; local checks passed; Linux motion acceptance pending |
+| G4 | Physical AUV and synchronous world stepping | Model provenance/geometry checks, Linux plugins, four-state barrier, actuator signs | Initial Linux run hit a physics abort; native added-mass fix locally checked, Linux rerun pending |
 | G5 | Source-pinned mission port | Recorded-state parity of maps, events, observations, action composition, rewards, termination | Not started |
 | G6 | ZERO four-vehicle closed loop | Linux search/discovery/handoff/capture, task/contact/engineering labels | Not started |
 | G7 | B2, then B3 inference | Selected checkpoint/config hashes, native loading, four-agent context and gating parity | Not started |

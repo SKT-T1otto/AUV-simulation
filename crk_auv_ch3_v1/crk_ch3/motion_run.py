@@ -27,6 +27,7 @@ def create_assets(output_root):
     summary = {'stage': 'G4', 'run_kind': 'four_vehicle_motion_control', 'engineering_fixture': True,
                'mission_executed': False, 'map_executed': False, 'checkpoint_loaded': False,
                'performance_claim': False, 'model_profile': profile['profile_id'],
+               'added_mass_mode': profile['added_mass_mode'],
                'model_status': profile['model_status'], 'vehicle_profile_sha256': canonical_hash(profile),
                'termination_reason': 'not_started', 'engineering_acceptance_passed': False,
                'motion_started': False, 'linux_sdf_valid': False,
@@ -61,6 +62,8 @@ def main():
         update_summary(output, run_kind='g4_assets_only')
         return
     processes, streams, reader = [], [], None
+    process_logs = []
+    failed_processes = []
     lock_stream = None
     failure_changes = None
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
@@ -88,6 +91,7 @@ def main():
             process = subprocess.Popen(command, env=env, stdout=stream, stderr=subprocess.STDOUT,
                                        start_new_session=True, cwd=ROOT)
             processes.append(process)
+            process_logs.append((process, filename))
             return process
         gz_args = ['gz', 'sim', '-v', '3']+(['-s'] if args.headless else [])+[str(output/'world.sdf')]
         launch(gz_args, 'gazebo.log')  # Deliberately starts paused; controller owns stepping.
@@ -99,6 +103,7 @@ def main():
                                       env=env, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, bufsize=1, start_new_session=True)
         processes.append(controller)
+        process_logs.append((controller, 'controller.log'))
         def forward():
             for line in controller.stdout:
                 controller_log.write(line)
@@ -110,8 +115,11 @@ def main():
         while controller.poll() is None:
             if time.monotonic() >= deadline:
                 raise TimeoutError('G4 wall-time limit exceeded (600 seconds)')
-            if any(p.poll() is not None for p in processes[:-1]):
-                raise RuntimeError('Gazebo or a bridge exited before the motion controller completed')
+            failed_processes = [dict(log=filename, exit_code=p.returncode)
+                                for p, filename in process_logs[:-1] if p.poll() is not None]
+            if failed_processes:
+                detail = ', '.join(f"{p['log']} (exit {p['exit_code']})" for p in failed_processes)
+                raise RuntimeError(f'Process exited before the motion controller completed: {detail}')
             time.sleep(.1)
         result = controller.returncode
         metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
@@ -126,6 +134,7 @@ def main():
         result = 1
         print(f'G4 launch failed: {error}', file=sys.stderr, flush=True)
         failure_changes = dict(termination_reason='launch_or_infrastructure_failure', error=str(error),
+                               failed_processes=failed_processes,
                                engineering_acceptance_passed=False)
     finally:
         # Each child owns a process group; stop controller before bridges/world.
@@ -150,6 +159,12 @@ def main():
             lock_stream.close()
         if failure_changes is not None:
             update_summary(output, **failure_changes)
+        # Only report processes that had already exited before cleanup. Bridge
+        # SIGINTs sent above must not be mistaken for the cause of a failure.
+        for failed in failed_processes:
+            lines = (output/failed['log']).read_text(encoding='utf-8', errors='replace').splitlines()
+            print(f"Last 35 lines of {output/failed['log']}:", file=sys.stderr)
+            print('\n'.join(lines[-35:]), file=sys.stderr, flush=True)
         if os.geteuid() == 0 and os.environ.get('CRK_OUTPUT_UID', '').isdigit() and os.environ.get('CRK_OUTPUT_GID', '').isdigit():
             uid, gid = int(os.environ['CRK_OUTPUT_UID']), int(os.environ['CRK_OUTPUT_GID'])
             for directory, folders, files in os.walk(output, followlinks=False):
