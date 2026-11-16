@@ -1,6 +1,7 @@
 """ROS 2 truth-odometry feedback controller for the independent single-boat demo."""
 import csv
 import json
+import os
 import signal
 import time
 from pathlib import Path
@@ -22,10 +23,14 @@ from crk_auv_demo.actors import TorchScriptActor
 class Tracker(Node):
     def __init__(self):
         super().__init__('crk_singleboat_tracker')
+        output_root = Path(os.environ.get('CRK_OUTPUT_ROOT', '/home/legion/AUV-simulation')).resolve()
+        if Path('/.dockerenv').is_file() and not output_root.is_mount():
+            raise RuntimeError(f'Host output directory is not mounted: {output_root}; '
+                               'run tools/run_linux.sh on the Ubuntu host')
         share = Path(get_package_share_directory('crk_auv_demo'))
         self.declare_parameter('vehicle_file', str(share/'config/vehicle.json'))
         self.declare_parameter('waypoints_file', str(share/'config/waypoints.json'))
-        self.declare_parameter('output_dir', '/tmp/crk_auv_results')
+        self.declare_parameter('output_dir', str(output_root/'results'/f'manual_{time.time_ns()}'))
         self.declare_parameter('policy_file', str(share/'config/policy_demo.json'))
         self.declare_parameter('policy_mode', 'zero')
         self.declare_parameter('actor_path', '')
@@ -44,7 +49,9 @@ class Tracker(Node):
         self.control = ControlLaw(self.config)
         self.sequence = WaypointSequence(self.plan['points'], self.plan['arrival_radius_m'],
                                          self.plan['arrival_speed_m_s'], self.plan['dwell_s'])
-        self.output = Path(self.get_parameter('output_dir').value)
+        self.output = Path(self.get_parameter('output_dir').value).resolve()
+        if not self.output.is_relative_to(output_root):
+            raise ValueError(f'output_dir must be under {output_root}')
         self.output.mkdir(parents=True, exist_ok=True)
         self.stream = (self.output/'trajectory.csv').open('x', newline='')
         self.csv = csv.writer(self.stream)

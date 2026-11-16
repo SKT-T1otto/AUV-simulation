@@ -4,6 +4,9 @@
 **/install/
 **/log/
 **/results/
+/figures/
+/reports/
+/.container/
 
 # Reproducible delivery archives and machine-local workspace audit records.
 /crk_auv_singleboat_v1.tar.gz

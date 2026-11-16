@@ -2,6 +2,20 @@
 set -eo pipefail
 BASE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$BASE"
+OUTPUT_ROOT="${CRK_OUTPUT_ROOT:-/home/legion/AUV-simulation}"
+if [ -f /.dockerenv ] && ! mountpoint -q "$OUTPUT_ROOT"; then
+  printf 'Host output directory is not mounted: %s\n' "$OUTPUT_ROOT" >&2
+  printf 'Run tools/run_linux.sh on the Ubuntu host to configure direct host storage.\n' >&2
+  exit 1
+fi
+OUTPUT_OWNER=''
+if [ -n "${CRK_OUTPUT_UID:-}${CRK_OUTPUT_GID:-}" ]; then
+  if ! [[ "${CRK_OUTPUT_UID:-}" =~ ^[0-9]+$ && "${CRK_OUTPUT_GID:-}" =~ ^[0-9]+$ ]]; then
+    printf 'CRK_OUTPUT_UID and CRK_OUTPUT_GID must both be numeric.\n' >&2
+    exit 1
+  fi
+  OUTPUT_OWNER="$CRK_OUTPUT_UID:$CRK_OUTPUT_GID"
+fi
 source /opt/ros/jazzy/setup.bash
 if [ ! -f "$BASE/install/setup.bash" ]; then
   printf 'First run: bash install_and_build.sh\n' >&2
@@ -12,8 +26,13 @@ source "$BASE/install/setup.bash"
 export GZ_PARTITION=crk_singleboat_v1
 export ROS_DOMAIN_ID=73
 export ROS_LOCALHOST_ONLY=1
-mkdir -p "$BASE/results"
-RUN_DIR="$(mktemp -d "$BASE/results/run_$(date +%Y%m%d_%H%M%S)_XXXXXX")"
+umask 022
+mkdir -p "$OUTPUT_ROOT/results"
+RUN_DIR="$(mktemp -d "$OUTPUT_ROOT/results/run_$(date +%Y%m%d_%H%M%S)_XXXXXX")"
+if [ "$(id -u)" = 0 ] && [ -n "$OUTPUT_OWNER" ]; then
+  chown "$OUTPUT_OWNER" "$RUN_DIR"
+fi
+chmod 750 "$RUN_DIR"
 SHARE="$(ros2 pkg prefix crk_auv_demo)/share/crk_auv_demo"
 printf 'Run directory: %s\n' "$RUN_DIR"
 printf 'One command starts Gazebo, clock/odometry/thrust bridges and controller.\n'
@@ -33,6 +52,9 @@ cleanup() {
     fi
   done
   wait 2>/dev/null || true
+  if [ "$(id -u)" = 0 ] && [ -n "$OUTPUT_OWNER" ]; then
+    chown -hR "$OUTPUT_OWNER" "$RUN_DIR" || printf 'Could not set result ownership: %s\n' "$RUN_DIR" >&2
+  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT

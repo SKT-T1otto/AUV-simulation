@@ -12,6 +12,8 @@ Gazebo 负责运动积分；Python 节点只计算控制指令和记录指标。
 
 - `crk_auv_singleboat_v1/`：Linux ROS 2 工作空间，含单艇模型、控制器、测试和运行脚本。
 - `crk_auv_singleboat_v1/README_zh.md`：安装、运行、验收和问题定位说明。
+- `tools/run_linux.sh`：宿主机启动入口，配置目录挂载并直接保存结果。
+- `crk_auv_singleboat_v1/HOST_OUTPUT.md`：`/home/legion/AUV-simulation` 的一次性配置与日常运行。
 - `tools/update_source_manifest.py`：更新源文件校验清单，不生成压缩包。
 - `crk_auv_singleboat_v1/POLICY_INTEGRATION.md`：策略、外部推理话题、TorchScript 导出契约。
 - `crk_auv_singleboat_v1/VALIDATION.md`：离线验证结果与实际运行验收边界。
@@ -21,33 +23,33 @@ Gazebo 负责运动积分；Python 节点只计算控制指令和记录指标。
 前提：已有安装 ROS 2 Jazzy、`ros-jazzy-ros-gz` 和 `ros-dev-tools` 的 Ubuntu 24.04 环境，
 且 NVIDIA GPU、X11 和 Gazebo 窗口已验证可用。宿主机可以保持 Ubuntu 20.04，仿真在 Ubuntu 24.04 容器内运行。
 
-使用已有 `crk-ros2-dev` 容器时，在 Ubuntu 宿主机执行：
+使用已有 `crk-ros2-dev` 容器时，在 Ubuntu 宿主机执行一次：
 
 ```bash
-git clone https://github.com/SKT-T1otto/AUV-simulation.git
-sudo docker start crk-ros2-dev
-sudo docker cp AUV-simulation crk-ros2-dev:/root/
-sudo docker exec -it crk-ros2-dev bash
+mkdir -p /home/legion/AUV-simulation
+git clone https://github.com/SKT-T1otto/AUV-simulation.git /home/legion/AUV-simulation/source
+bash /home/legion/AUV-simulation/source/tools/run_linux.sh --setup-only
 ```
 
-在容器内执行（首次复制安装；再次更新先保留既有运行结果）：
+已存在 source 仓库时先 `git -C /home/legion/AUV-simulation/source pull --ff-only`，不重复克隆。
+配置脚本保留已安装环境及旧容器，将源码和输出目录挂载到新容器 `crk-ros2-home`，首次自动编译。
+后续在宿主机启动：
 
 ```bash
-cd /root/AUV-simulation/crk_auv_singleboat_v1
-sha256sum -c SHA256SUMS
-bash install_and_build.sh
-bash run_demo.sh
+bash /home/legion/AUV-simulation/source/tools/run_linux.sh
 ```
 
 先用 Ctrl+C 停止之前的 `shapes.sdf` 与测试时钟桥接。
-`run_demo.sh` 在一个终端中管理 Gazebo、消息桥接及控制器，结果保存在工作空间 `results/run_*` 下。
-运行说明和诊断步骤见 `crk_auv_singleboat_v1/README_zh.md`。
+`run_demo.sh` 在一个终端中管理 Gazebo、消息桥接及控制器。
+结果实时保存到宿主机 `/home/legion/AUV-simulation/results/run_*`，图表与报告使用同一根目录。
+无需运行结束后复制；从 ToDesk 可直接访问。配置与路径说明见 `crk_auv_singleboat_v1/HOST_OUTPUT.md`。
 
 默认使用 5 Hz 零残差策略 + 原参考公式的低速航点先验，执行层为 50 Hz。
 测试外部 Python 推理往返时，可用：
 
 ```bash
-CRK_POLICY_MODE=external CRK_EXTERNAL_ZERO=1 bash run_demo.sh
+CRK_POLICY_MODE=external CRK_EXTERNAL_ZERO=1 \
+    bash /home/legion/AUV-simulation/source/tools/run_linux.sh
 ```
 
 诊断 actor 仍是零残差，不加载训练模型。真实 actor 支持外部 ROS 推理进程及可选的无状态 TorchScript，

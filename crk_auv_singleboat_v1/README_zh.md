@@ -21,26 +21,23 @@
 
 ## Linux 启动
 
-Ubuntu 宿主机首次获取代码：
+结果统一直接保存到宿主机 `/home/legion/AUV-simulation`。
+完整的一次性配置、权限和挂载说明见 [HOST_OUTPUT.md](HOST_OUTPUT.md)。
+Ubuntu 宿主机首次获取代码并复用已有容器环境：
 
 ```bash
-git clone https://github.com/SKT-T1otto/AUV-simulation.git
-sudo docker start crk-ros2-dev
-sudo docker cp AUV-simulation crk-ros2-dev:/root/
-sudo docker exec -it crk-ros2-dev bash
+mkdir -p /home/legion/AUV-simulation
+git clone https://github.com/SKT-T1otto/AUV-simulation.git /home/legion/AUV-simulation/source
+bash /home/legion/AUV-simulation/source/tools/run_linux.sh --setup-only
 ```
 
-容器内：
+已存在 source 仓库时使用 git pull --ff-only 更新，不重复克隆。后续在宿主机启动：
 
 ```bash
-cd /root/AUV-simulation/crk_auv_singleboat_v1
-sha256sum -c SHA256SUMS
-bash install_and_build.sh
-bash run_demo.sh
+bash /home/legion/AUV-simulation/source/tools/run_linux.sh
 ```
 
-先用 Ctrl+C 结束旧 shapes 场景及其桥接，不重复创建同名容器。
-若代码以前位于 `/root/crk_auv_singleboat_v1`，以实际工作空间路径为准，更新时保留旧结果。
+先用 Ctrl+C 结束旧 shapes 场景及其桥接。脚本创建并复用 `crk-ros2-home`，保留旧容器与旧结果。
 不需要生成或上传压缩包。
 
 `run_demo.sh` 在一个终端管理场景、桥接和控制器。蓝色艇体 auv_0 位于 z=-2 m，金色球体为航点。
@@ -53,7 +50,8 @@ bash run_demo.sh
 外部零残差消息往返：
 
 ```bash
-CRK_POLICY_MODE=external CRK_EXTERNAL_ZERO=1 bash run_demo.sh
+CRK_POLICY_MODE=external CRK_EXTERNAL_ZERO=1 \
+    bash /home/legion/AUV-simulation/source/tools/run_linux.sh
 ```
 
 真实模型的外部推理、TorchScript 加载、观测字段、三维动作和时效协议见 [策略接口说明](POLICY_INTEGRATION.md)。
@@ -61,17 +59,17 @@ CRK_POLICY_MODE=external CRK_EXTERNAL_ZERO=1 bash run_demo.sh
 
 ## 结果
 
-`results/run_*` 每次使用新目录，不覆盖旧结果。
+`/home/legion/AUV-simulation/results/run_*` 每次使用新目录，不覆盖旧结果；ToDesk 可直接读取。
 
 - trajectory.csv：位置、误差、姿态、推力、策略序号、世界系期望加速度。
 - policy.jsonl：观测与接受动作的映射诊断。
 - summary.json：终止原因、航点数、驻留 RMSE、策略模式及配置。
 - gazebo.log、bridge.log：启动/消息问题；自动外部零 actor 另有 actor.log。
 
-在容器内工作空间查看最近结果：
+在宿主机查看最近结果：
 
 ```bash
-CRK_LAST_RUN=$(ls -dt results/run_* | head -n 1)
+CRK_LAST_RUN=$(ls -dt /home/legion/AUV-simulation/results/run_* | head -n 1)
 cat "$CRK_LAST_RUN/summary.json"
 ```
 
@@ -80,8 +78,8 @@ cat "$CRK_LAST_RUN/summary.json"
 
 ## 更新与诊断
 
-- 容器内克隆：停止运行后，在仓库根目录 `git pull --ff-only`，重新编译后启动。
-- 宿主机克隆后复制：先更新宿主机仓库，再同步源文件，保留容器 results 和本地实验修改。
+- 停止运行后，在宿主机 source 仓库根目录 `git pull --ff-only`。修改包结构或依赖后在新容器内重新编译。
+- 无输出挂载时明确报错；使用 tools/run_linux.sh 配置，禁止将结果回退到容器私有目录。
 - `SHA256SUMS` 用于干净克隆；修改源码后在仓库根运行 `python3 tools/update_source_manifest.py`，不会打包。
 - 无时钟/里程计或外部订阅者：初始 45 s 壁钟超时后退出，检查启动日志。
 - 外部动作过期/无效：终止测试并发零推力，不静默换成另一策略。
