@@ -81,5 +81,5 @@ cat "$CRK_G5_RUN/summary.json"
 
 通过需要 `termination_reason=completed`、`semantic_parity_passed=true`、四个 case
 都 `parity_passed=true`。`gazebo_motion_executed=false` 是本阶段正常标记。
-Windows 本地检查已通过；Linux 环境验证待该命令的实际输出。通过后进入 G6 ZERO
-四艇搜索闭环，再进入 G7 `.pt` 推理。
+Windows 本地检查及用户 2026-11-17 提供的 Linux 日志均已通过（六项检查、四组一致性验证）。
+G6 ZERO 四艇搜索入口见 G6_SEARCH.md，后续模型推理仍留在 G7。

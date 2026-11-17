@@ -15,5 +15,7 @@
   G3 passed Linux SDF/loading validation and user visual confirmation on 2026-11-16.
   G4 passed the uploaded 37 s Linux motion run on 2026-11-16.
   G5 is authorized against the current Active source snapshot.
-  G5 local parity passed; G6 must wait for the Linux G5 parity gate.
+  G5 passed the user-provided Linux parity log on 2026-11-17.
+  G6 ZERO Gazebo integration is authorized; its code/local checks are not Linux acceptance.
+  G7 waits for actual G6 search evidence.
   native_g5 is a byte-preserved source snapshot. Future changes require a new reviewed pin, not edits in place.

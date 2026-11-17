@@ -11,9 +11,9 @@ Gazebo 负责运动积分；Python 节点只计算控制指令和记录指标。
 ## 入口
 
 - `crk_auv_singleboat_v1/`：Linux ROS 2 工作空间，含单艇模型、控制器、测试和运行脚本。
-- `crk_auv_ch3_v1/`：第三章分阶段改造；G3/G4 已验收，新增 G5 来源固定的任务与地图接入。
+- `crk_auv_ch3_v1/`：第三章分阶段改造；G3/G4/G5 已验收，新增 G6 ZERO 四艇搜索闭环。
 - `tools/run_ch3_motion.sh`：四艇运动入口；参数依据和验收见 `crk_auv_ch3_v1/G4_MOTION.md`。
-- `crk_auv_ch3_v1/IMPLEMENTATION_PLAN.md`：阶段顺序；G5 Linux 回放通过后再进入 G6 实际四艇搜索。
+- `crk_auv_ch3_v1/IMPLEMENTATION_PLAN.md`：阶段顺序；G6 实际四艇搜索仍待 Linux 验收。
 - `crk_auv_singleboat_v1/README_zh.md`：安装、运行、验收和问题定位说明。
 - `tools/run_linux.sh`：宿主机启动入口，配置目录挂载并直接保存结果。
 - `crk_auv_singleboat_v1/HOST_OUTPUT.md`：`/home/legion/AUV-simulation` 的一次性配置与日常运行。
@@ -22,6 +22,8 @@ Gazebo 负责运动积分；Python 节点只计算控制指令和记录指标。
 - `crk_auv_singleboat_v1/VALIDATION.md`：离线验证结果与实际运行验收边界。
 
 - `tools/run_ch3_mission_check.sh`：G5 Linux 一致性验证入口，无需 `.pt`；详见 `crk_auv_ch3_v1/G5_MISSION.md`。
+
+- `tools/run_ch3_search.sh`：G6 Gazebo 搜索入口，先 `--mode smoke`，再 `capture` / `search`；详见 `crk_auv_ch3_v1/G6_SEARCH.md`。
 
 ## 使用
 
