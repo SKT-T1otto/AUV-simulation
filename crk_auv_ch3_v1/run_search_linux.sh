@@ -17,7 +17,7 @@ sha256sum -c SHA256SUMS
 export PYTHONDONTWRITEBYTECODE=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
-"$G6_PYTHON" -B -c 'import rclpy,torch,numpy,scipy; from ros_gz_interfaces.msg import Contacts; from ros_gz_interfaces.srv import ControlWorld,SetEntityPose; from crk_ch3.native_source import activate_native; activate_native()'
+"$G6_PYTHON" -B -c 'import rclpy,torch,numpy,scipy; from ros_gz_interfaces.msg import Contacts,WorldStatistics; from ros_gz_interfaces.srv import ControlWorld,SetEntityPose; from crk_ch3.native_source import activate_native; activate_native()'
 "$G6_PYTHON" -B -m unittest discover -s tests -v
 "$G6_PYTHON" -B -m unittest discover -s tests_g5 -v
 "$G6_PYTHON" -B -u -m crk_ch3.search_run "$@"

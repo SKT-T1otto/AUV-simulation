@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import rclpy
 from rclpy.signals import SignalHandlerOptions
-from ros_gz_interfaces.msg import Contacts
+from ros_gz_interfaces.msg import Contacts, WorldStatistics
 from ros_gz_interfaces.srv import SetEntityPose
 
 from .motion_ros import MotionNode
@@ -33,9 +33,32 @@ class SearchNode(MotionNode):
         self.contact_record = contact_record
         self.contact_events = 0
         self.contact_failure = None
+        self.world_status = None
+        self.stats_sequence = 0
+        self.stats_sub = self.create_subscription(WorldStatistics, '/g6/world_stats', self.on_stats, 10)
         self.contact_subs = [self.create_subscription(Contacts, f'/auv_{i}/contacts',
             lambda msg, agent=i: self.on_contact(agent, msg), 100) for i in range(4)]
         self.marker_client = self.create_client(SetEntityPose, f'/world/{WORLD}/set_pose')
+
+    def on_stats(self, message):
+        self.stats_sequence += 1
+        self.world_status = dict(sim_ns=message.sim_time.sec*1_000_000_000+message.sim_time.nanosec,
+                                 paused=bool(message.paused), iterations=int(message.iterations))
+
+    def confirm_pause(self, expected_ns=None):
+        # ControlWorld replies on queue receipt; observe a fresh paused-world
+        # status as well. Do not infer completed pause from the service reply.
+        sequence = self.stats_sequence
+        minimum_ns = self.clock_ns
+        self.control_world()
+        self.wait(lambda: self.stats_sequence > sequence and self.world_status['paused']
+                  and self.world_status['sim_ns'] >= minimum_ns
+                  and self.clock_ns == self.world_status['sim_ns'], 10., 'Paused-world status timeout')
+        status_ns = self.world_status['sim_ns']
+        if self.clock_ns != status_ns or (expected_ns is not None and status_ns != expected_ns):
+            raise PlantFailure(f'Paused-world clock mismatch: expected_ns={expected_ns}, '
+                               f'clock_ns={self.clock_ns}, world_status={self.world_status}')
+        return status_ns
 
     def on_contact(self, agent, message):
         if not message.contacts:
@@ -99,19 +122,34 @@ def main():
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: setattr(node, 'stopping', True))
         states = node.ready()
+        warmup_clock_ns = node.clock_ns
+        summary['warmup_clock_ns'] = warmup_clock_ns
         expected = np.array([Frame().position(p) for p in scene['initial_agent_positions']])
         if np.max(np.linalg.norm(np.array([s.position for s in states])-expected, axis=1)) > .02:
             raise PlantFailure('Spawn/warmup state differs from scene by more than 0.02 m')
-        plant = SearchTransport(node, states, load_profile(),
-                                record=lambda row: record('control.jsonl', row),
-                                realtime=os.environ.get('CRK_G6_REALTIME_VIEW') == '1')
-        runtime = ExternalMissionRuntime(scene, plant)
+        # Native reset/planning does not call the motion callback. Bind the
+        # actual plant only once ROS startup and marker initialization finish.
+        runtime = ExternalMissionRuntime(scene, lambda request: plant(request))
         native = runtime.env.unwrapped
         (output/'resolved_config.json').write_text(json.dumps(normalized(runtime.config), indent=2)+'\n', encoding='utf-8')
         (output/'role_specs.json').write_text(json.dumps(normalized(runtime.env.get_public_vehicle_specs()), indent=2)+'\n', encoding='utf-8')
         native.enable_public_event_capture('g6', capacity=2048)
         native._public_event_journal.reset()
         node.show_target(native.target_state.position)
+        epoch_ns = node.confirm_pause()
+        startup_delta = epoch_ns-warmup_clock_ns
+        summary.update(task_epoch_ns=epoch_ns, startup_clock_delta_ns=startup_delta,
+                       startup_world_status=node.world_status)
+        if not 0 <= startup_delta <= 2_000_000:
+            raise PlantFailure(f'World advanced during startup: warmup_ns={warmup_clock_ns}, '
+                               f'epoch_ns={epoch_ns}, delta_ns={startup_delta}; do not press Play')
+        # The existing odometry contract admits at most one physics-substep lag.
+        if any(abs(s.stamp_ns-epoch_ns) > 2_000_000 for s in states):
+            raise PlantFailure('Startup odometry does not match the confirmed paused epoch')
+        plant = SearchTransport(node, states, load_profile(),
+                                record=lambda row: record('control.jsonl', row),
+                                realtime=os.environ.get('CRK_G6_REALTIME_VIEW') == '1')
+        node.get_logger().info(f'G6 synchronized startup: warmup_ns={warmup_clock_ns}, epoch_ns={epoch_ns}')
         event_cursor = 0
         budget = 16 if summary['mode'] == 'smoke' else 400
         for _ in range(budget):
@@ -138,6 +176,7 @@ def main():
                     'known_free_mask', 'known_occupied_mask', 'unknown_mask')}))
                 last_map_step = completed
             node.show_target(native.target_state.position)
+            node.confirm_pause(plant.epoch_ns+runtime.step*200_000_000)
             node.check()
             if completed == 1 or completed % 5 == 0 or runtime.terminal:
                 node.get_logger().info(f'G6 step={runtime.step}/400 found={task.target_found} '
@@ -152,6 +191,9 @@ def main():
         reason, summary['error'] = 'physical_contact', str(error)
     except Exception as error:
         reason, summary['error'] = 'engineering_failure', str(error)
+        if node is not None:
+            summary['failure_clock_ns'] = node.clock_ns
+            summary['failure_world_status'] = node.world_status
         (output/'error_traceback.txt').write_text(traceback.format_exc(), encoding='utf-8')
         print(traceback.format_exc(), flush=True)
     finally:

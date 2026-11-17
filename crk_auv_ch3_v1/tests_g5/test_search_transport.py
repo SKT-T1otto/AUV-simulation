@@ -52,4 +52,5 @@ class SearchPlantTests(unittest.TestCase):
         self.assertEqual(len(root.findall('.//joint')), 32)
         self.assertIsNone(root.find(".//model[@name='target_truth_marker']//collision"))
         self.assertIn('/auv_3/contacts', search_bridge_yaml())
+        self.assertIn('ros_gz_interfaces/msg/WorldStatistics', search_bridge_yaml())
         self.assertEqual(fixture('capture')['initial_agent_positions'][3], [4.8, 2, 2])

@@ -27,6 +27,7 @@ def client():
         modules[name] = ModuleType(name)
     modules['rclpy.signals'].SignalHandlerOptions = SimpleNamespace(NO=0)
     modules['ros_gz_interfaces.msg'].Contacts = object
+    modules['ros_gz_interfaces.msg'].WorldStatistics = object
     modules['ros_gz_interfaces.srv'].SetEntityPose = SimpleNamespace(Request=lambda: SimpleNamespace(
         entity=SimpleNamespace(name='', type=0), pose=SimpleNamespace(position=SimpleNamespace(x=0, y=0, z=0),
                                                                     orientation=SimpleNamespace(w=0))))
@@ -71,6 +72,27 @@ class SearchRosTests(unittest.TestCase):
             node.check()
         self.assertEqual(len(records), 1)
 
+    def test_pause_confirmation_waits_for_stats_and_rejects_epoch_drift(self):
+        node = self.module.SearchNode.__new__(self.module.SearchNode)
+        node.clock_ns, node.stats_sequence, node.world_status = 40_000_000, 0, None
+        node.control_world = lambda: None  # Service receipt alone is insufficient.
+        def wait(predicate, *_):
+            self.assertFalse(predicate())
+            node.on_stats(SimpleNamespace(sim_time=SimpleNamespace(sec=0, nanosec=0),
+                                          paused=True, iterations=0))
+            self.assertFalse(predicate())  # A queued startup pause is stale.
+            node.on_stats(SimpleNamespace(sim_time=SimpleNamespace(sec=0, nanosec=node.clock_ns),
+                                          paused=False, iterations=20))
+            self.assertFalse(predicate())
+            node.on_stats(SimpleNamespace(sim_time=SimpleNamespace(sec=0, nanosec=node.clock_ns),
+                                          paused=True, iterations=20))
+            self.assertTrue(predicate())
+        node.wait = wait
+        self.assertEqual(node.confirm_pause(), 40_000_000)
+        node.clock_ns = 42_000_000
+        with self.assertRaisesRegex(self.module.PlantFailure, 'expected_ns=40000000'):
+            node.confirm_pause(40_000_000)
+
     def test_actual_entry_point_records_native_task_on_transport_standin(self):
         from crk_ch3.search_run import create_assets
         from crk_ch3.search_world import fixture
@@ -80,6 +102,8 @@ class SearchRosTests(unittest.TestCase):
         class FakeNode:
             def __init__(self, contact_record):
                 self.clock_ns = 40_000_000
+                self.marker_calls = 0
+                self.world_status = dict(sim_ns=self.clock_ns, paused=True, iterations=20)
                 self.contact_failure, self.contact_events, self.stopping = None, 0, False
                 self.states = [BodyState(self.clock_ns, Frame().position(p), (0, 0, 0, 1), (0, 0, 0), (0, 0, 0))
                                for p in fixture('capture')['initial_agent_positions']]
@@ -90,7 +114,16 @@ class SearchRosTests(unittest.TestCase):
             def publish(self, values):
                 pass
             def show_target(self, position):
-                pass
+                # Reproduce a queued clock callback delivered during startup
+                # marker service work, after warmup but before the first task.
+                self.marker_calls += 1
+                if self.marker_calls == 1:
+                    self.clock_ns += 2_000_000
+            def confirm_pause(self, expected_ns=None):
+                if expected_ns is not None and self.clock_ns != expected_ns:
+                    raise AssertionError('Epoch moved after task startup')
+                self.world_status = dict(sim_ns=self.clock_ns, paused=True, iterations=self.clock_ns//2_000_000)
+                return self.clock_ns
             def step(self, count):
                 if count != 10:
                     raise AssertionError('Wrong batch size')
@@ -122,6 +155,8 @@ class SearchRosTests(unittest.TestCase):
             self.assertFalse(result['g6_search_acceptance_passed'])
             self.assertEqual(result['completed_task_steps'], 6)
             self.assertEqual(result['control_steps'], 60)
+            self.assertEqual(result['task_epoch_ns'], 42_000_000)
+            self.assertEqual(result['startup_clock_delta_ns'], 2_000_000)
             self.assertEqual(len((output/'transitions.jsonl').read_text().splitlines()), 6)
             self.assertTrue((output/'maps.jsonl').is_file())
             self.assertTrue((output/'resolved_config.json').is_file())

@@ -3,7 +3,7 @@ import copy
 import json
 import xml.etree.ElementTree as ET
 from .vehicle import ROOT
-from .motion_world import build_motion_world, bridge_yaml, plugin
+from .motion_world import WORLD, build_motion_world, bridge_yaml, plugin
 from .preview import child
 from .scenario import Frame, validate_scene
 
@@ -41,6 +41,11 @@ def build_search_world(scene, profile, frame=Frame()):
 
 def search_bridge_yaml():
     value = bridge_yaml()
+    value += ('- ros_topic_name: "/g6/world_stats"\n'
+              f'  gz_topic_name: "/world/{WORLD}/stats"\n'
+              '  ros_type_name: "ros_gz_interfaces/msg/WorldStatistics"\n'
+              '  gz_type_name: "gz.msgs.WorldStatistics"\n'
+              '  direction: GZ_TO_ROS\n  lazy: false\n')
     for i in range(4):
         value += (f'- ros_topic_name: "/auv_{i}/contacts"\n'
                   f'  gz_topic_name: "/auv_{i}/contacts"\n'

@@ -43,7 +43,10 @@ class SearchTransport:
     def __call__(self, request):
         expected = self.epoch_ns+request.start_ns
         if self.node.clock_ns != expected:
-            raise PlantFailure('Task/Gazebo clock mismatch before control request')
+            raise PlantFailure(f'Task/Gazebo clock mismatch before control request: '
+                f'task_step={request.task_step}, expected_ns={expected}, actual_ns={self.node.clock_ns}, '
+                f'epoch_ns={self.epoch_ns}, start_ns={request.start_ns}, '
+                f'control_steps={self.control_steps}, world_status={getattr(self.node, "world_status", None)}')
         for substep in range(10):
             started = time.monotonic()
             self.node.check()
