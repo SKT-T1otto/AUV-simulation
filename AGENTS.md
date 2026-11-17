@@ -13,4 +13,7 @@
   Validate each new module before implementing a dependent module. A pending Linux
   or GUI gate requires actual evidence; local XML/unit tests cannot satisfy it.
   G3 passed Linux SDF/loading validation and user visual confirmation on 2026-11-16.
-  G4 motion/control is authorized. G5+ must wait for real Linux G4 evidence.
+  G4 passed the uploaded 37 s Linux motion run on 2026-11-16.
+  G5 is authorized against the current Active source snapshot.
+  G5 local parity passed; G6 must wait for the Linux G5 parity gate.
+  native_g5 is a byte-preserved source snapshot. Future changes require a new reviewed pin, not edits in place.

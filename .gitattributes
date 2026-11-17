@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.gz -text
 *.zip -text
+# Preserve the reviewed upstream snapshot byte-for-byte, including line endings.
+crk_auv_ch3_v1/native_g5/** -text
