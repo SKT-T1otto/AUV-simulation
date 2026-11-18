@@ -27,6 +27,10 @@ Gazebo 负责运动积分；Python 节点只计算控制指令和记录指标。
 
 ## 使用
 
+新增独立运动包线测试：`tools/run_ch3_envelope.sh x|y|z|track`，每次25或31秒模拟时间。
+复用已有容器与物理参数，自动生成分层诊断报告。运行方式和判据见
+`crk_auv_ch3_v1/ENVELOPE_TESTS.md`；实际可达范围仍需 Linux Gazebo 数据，不作为搜索成功证据。
+
 前提：已有安装 ROS 2 Jazzy、`ros-jazzy-ros-gz` 和 `ros-dev-tools` 的 Ubuntu 24.04 环境，
 且 NVIDIA GPU、X11 和 Gazebo 窗口已验证可用。宿主机可以保持 Ubuntu 20.04，仿真在 Ubuntu 24.04 容器内运行。
 

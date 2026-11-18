@@ -19,6 +19,7 @@ class AccelerationControl(VehicleControl):
             direction = world_v/speed
             a -= max(0., np.dot(a, direction))*direction
             a -= c['velocity_gain']*(speed-c['speed_limit_m_s'])*direction
+        speed_governed = a.copy()
         a = np.clip(a, -c['acceleration_limit_m_s2'], c['acceleration_limit_m_s2'])
         drag = np.array(p['linear_drag'][:3])*v+np.array(p['quadratic_drag'][:3])*np.abs(v)*v
         force = (p['mass_kg']+np.array(p['added_mass'][:3]))*(r.T@a)+drag
@@ -34,4 +35,7 @@ class AccelerationControl(VehicleControl):
         self.force = np.clip(self.force+change, -self.limit, self.limit)
         return self.force.copy(), dict(requested_acceleration_world=requested.tolist(),
             governed_acceleration_world=a.tolist(), requested_wrench=wrench.tolist(),
+            speed_governed_acceleration_world=speed_governed.tolist(),
+            allocated_thrust_N=desired.tolist(), allocated_wrench=(self.B@desired).tolist(),
+            commanded_wrench=(self.B@self.force).tolist(),
             allocation_residual=float(np.linalg.norm(self.W@(self.B@desired-wrench))))

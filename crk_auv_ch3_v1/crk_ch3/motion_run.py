@@ -1,5 +1,6 @@
 """G4 Linux launch supervisor: new output dir, SDF validation, bridges and control."""
 import argparse
+import hashlib
 from datetime import datetime
 import json
 import os
@@ -16,13 +17,20 @@ from .motion_world import WORLD, bridge_yaml, build_motion_world
 from .vehicle import ROOT, load_profile
 
 
-def create_assets(output_root):
+def create_assets(output_root, envelope_case=None):
     scene = json.loads((ROOT/'tests/fixtures/scene.json').read_text(encoding='utf-8'))
+    if envelope_case:
+        from .envelope_protocol import engineering_scene
+        scene = engineering_scene(scene)
     profile = load_profile()
     xml, truth = build_motion_world(scene, profile)
+    if envelope_case:
+        from .search_world import build_search_world, search_bridge_yaml
+        xml, truth = build_search_world(scene, profile)
     parent = output_root/'results/ch3'
     parent.mkdir(parents=True, exist_ok=True)
-    output = Path(tempfile.mkdtemp(prefix='motion_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_', dir=parent))
+    prefix = 'envelope_'+envelope_case+'_' if envelope_case else 'motion_'
+    output = Path(tempfile.mkdtemp(prefix=prefix+datetime.now().strftime('%Y%m%d_%H%M%S')+'_', dir=parent))
     output.chmod(0o755)
     summary = {'stage': 'G4', 'run_kind': 'four_vehicle_motion_control', 'engineering_fixture': True,
                'mission_executed': False, 'map_executed': False, 'checkpoint_loaded': False,
@@ -36,8 +44,18 @@ def create_assets(output_root):
     for name, value in [('scenario.json', scene), ('truth_scene.json', truth),
                         ('vehicle_profile.json', profile), ('summary.json', summary)]:
         (output/name).write_text(json.dumps(value, indent=2, allow_nan=False)+'\n', encoding='utf-8')
+    if envelope_case:
+        from .envelope_protocol import program
+        summary.update(stage='G6_ENVELOPE', case=envelope_case, run_kind='bounded_physical_envelope',
+                       training_executed=False, contact_absence_proven=False,
+                       source_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest(),
+                       diagnostic_source_sha256={name: hashlib.sha256((ROOT/'crk_ch3'/name).read_bytes()).hexdigest()
+                           for name in ('envelope_protocol.py','envelope_ros.py','envelope_report.py',
+                                        'search_control.py','search_transport.py','vehicle.py','motion_world.py')})
+        (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n', encoding='utf-8')
+        (output/'program.json').write_text(json.dumps(program(envelope_case), indent=2)+'\n', encoding='utf-8')
     (output/'world.sdf').write_text(xml+'\n', encoding='utf-8')
-    (output/'bridge.yaml').write_text(bridge_yaml(), encoding='utf-8')
+    (output/'bridge.yaml').write_text(search_bridge_yaml() if envelope_case else bridge_yaml(), encoding='utf-8')
     return output
 
 
@@ -52,14 +70,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--generate-only', action='store_true', help='Only generate assets; no motion validation')
+    parser.add_argument('--envelope-case', choices=('x', 'y', 'z', 'track'))
     args = parser.parse_args()
     output_root = Path(os.environ.get('CRK_OUTPUT_ROOT', '/home/legion/AUV-simulation')).resolve()
     if Path('/.dockerenv').is_file() and not output_root.is_mount():
         raise RuntimeError('Linux host output root is not mounted')
-    output = create_assets(output_root)
-    print(f'G4 results: {output}', flush=True)
+    output = create_assets(output_root, args.envelope_case) if args.envelope_case else create_assets(output_root)
+    print(f'{"Envelope" if args.envelope_case else "G4"} results: {output}', flush=True)
     if args.generate_only:
-        update_summary(output, run_kind='g4_assets_only')
+        update_summary(output, run_kind='envelope_assets_only' if args.envelope_case else 'g4_assets_only')
         return
     processes, streams, reader = [], [], None
     process_logs = []
@@ -97,9 +116,12 @@ def main():
         launch(gz_args, 'gazebo.log')  # Deliberately starts paused; controller owns stepping.
         launch([bridge, '--ros-args', '-p', f'config_file:={output/"bridge.yaml"}'], 'bridge.log')
         launch([bridge, f'/world/{WORLD}/control@ros_gz_interfaces/srv/ControlWorld'], 'world_control_bridge.log')
+        if args.envelope_case:
+            launch([bridge, f'/world/{WORLD}/set_pose@ros_gz_interfaces/srv/SetEntityPose'], 'target_marker_bridge.log')
         controller_log = (output/'controller.log').open('w', encoding='utf-8')
         streams.append(controller_log)
-        controller = subprocess.Popen([sys.executable, '-u', '-m', 'crk_ch3.motion_ros', '--output', str(output)],
+        controller_module = 'crk_ch3.envelope_ros' if args.envelope_case else 'crk_ch3.motion_ros'
+        controller = subprocess.Popen([sys.executable, '-u', '-m', controller_module, '--output', str(output)],
                                       env=env, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, bufsize=1, start_new_session=True)
         processes.append(controller)
