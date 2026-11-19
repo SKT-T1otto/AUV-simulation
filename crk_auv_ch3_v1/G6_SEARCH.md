@@ -142,3 +142,6 @@ Gazebo 接触、服务、控制与任务运行验收。后续 `.pt` 推理仍留
 - [Gazebo Contact 官方示例](https://github.com/gazebosim/gz-sim/blob/gz-sim8/examples/worlds/contact_sensor.sdf)
 - [Jazzy Contacts 消息](https://github.com/gazebosim/ros_gz/blob/jazzy/ros_gz_interfaces/msg/Contacts.msg)
 - [Jazzy SetEntityPose 服务](https://github.com/gazebosim/ros_gz/blob/jazzy/ros_gz_interfaces/srv/SetEntityPose.srv)
+
+独立的32步D2搜索重新分配诊断见 [D2_REASSIGNMENT_DIAGNOSTIC.md](D2_REASSIGNMENT_DIAGNOSTIC.md)。
+它必须显式启用；先运行baseline32并审阅，再运行defer条件，不构成完整搜索或模型验收。

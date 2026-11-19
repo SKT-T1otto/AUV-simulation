@@ -1,5 +1,6 @@
 """G6 Linux supervisor: source-pinned ZERO mission and real Gazebo plant."""
 import argparse
+import hashlib
 from datetime import datetime
 import json
 import os
@@ -17,9 +18,12 @@ from .search_world import fixture, build_search_world, search_bridge_yaml
 from .scenario import select_scene
 from .native_source import activate_native
 from .vehicle import ROOT, load_profile
+from .reassignment_contract import CONDITIONS, SCHEMA, BUDGET, BOUNDARY, PREFIX_CRITERIA
 
 
-def create_assets(output_root, mode='smoke', scene=None):
+def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition=None):
+    if diagnostic_condition is not None and (diagnostic_condition not in CONDITIONS or mode != 'search' or scene is not None):
+        raise ValueError('Diagnostic v1 requires the original search fixture')
     lock = activate_native()
     scene = fixture(mode) if scene is None else scene
     if type(scene.get('planner_seed')) is not int:
@@ -28,7 +32,8 @@ def create_assets(output_root, mode='smoke', scene=None):
     xml, truth = build_search_world(scene, profile)
     parent = output_root/'results/ch3'
     parent.mkdir(parents=True, exist_ok=True)
-    output = Path(tempfile.mkdtemp(prefix='search_'+mode+'_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_', dir=parent))
+    prefix = 'search_'+mode if diagnostic_condition is None else 'd2_'+diagnostic_condition
+    output = Path(tempfile.mkdtemp(prefix=prefix+'_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_', dir=parent))
     output.chmod(0o755)
     summary = dict(stage='G6', mode=mode, run_kind='zero_gazebo_closed_loop',
         engineering_fixture='engineering' in scene.get('purpose', ''),
@@ -41,6 +46,12 @@ def create_assets(output_root, mode='smoke', scene=None):
         task_dt_s=.2, control_dt_s=.02, physics_dt_s=.002,
         contact_absence_proven=False,
         command_acknowledgement='DDS bridge receipt, not atomic Gazebo plant application')
+    if diagnostic_condition is not None:
+        summary.update(diagnostic_schema=SCHEMA, diagnostic_condition=diagnostic_condition,
+            diagnostic_budget=BUDGET, boundary_step=BOUNDARY, native_max_steps=400,
+            prefix_criteria=PREFIX_CRITERIA, diagnostic_valid=False,
+            run_kind='d2_reassignment_diagnostic_gazebo',
+            adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
     for name, value in [('scenario.json', scene), ('truth_scene.json', truth),
                         ('vehicle_profile.json', profile), ('summary.json', summary)]:
         (output/name).write_text(json.dumps(value, indent=2, allow_nan=False)+'\n', encoding='utf-8')
@@ -63,16 +74,19 @@ def main():
     parser.add_argument('--mode', choices=('smoke', 'capture', 'search'), default='smoke')
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--scenario-id')
+    parser.add_argument('--diagnostic-condition', choices=CONDITIONS)
     args = parser.parse_args()
     if args.scenario_id and not args.manifest:
         parser.error('--scenario-id requires --manifest')
     if args.manifest and args.mode != 'search':
         parser.error('--manifest requires --mode search')
+    if args.diagnostic_condition and (args.mode != 'search' or args.manifest):
+        parser.error('Diagnostic v1 requires --mode search and the original fixture')
     output_root = Path(os.environ.get('CRK_OUTPUT_ROOT', '/home/legion/AUV-simulation')).resolve()
     if Path('/.dockerenv').is_file() and not output_root.is_mount():
         raise RuntimeError('Linux host output root is not mounted')
     scene = None if args.manifest is None else select_scene(json.loads(args.manifest.read_text(encoding='utf-8')), args.scenario_id)
-    output = create_assets(output_root, args.mode, scene)
+    output = create_assets(output_root, args.mode, scene, diagnostic_condition=args.diagnostic_condition)
     print(f'G6 results: {output}', flush=True)
     if args.generate_only:
         update_summary(output, run_kind='g6_assets_only')
@@ -116,7 +130,8 @@ def main():
         launch([bridge, f'/world/{WORLD}/set_pose@ros_gz_interfaces/srv/SetEntityPose'], 'target_marker_bridge.log')
         controller_log = (output/'controller.log').open('w', encoding='utf-8')
         streams.append(controller_log)
-        controller = subprocess.Popen([sys.executable, '-u', '-m', 'crk_ch3.search_ros', '--output', str(output)],
+        module = 'crk_ch3.reassignment_ros' if args.diagnostic_condition else 'crk_ch3.search_ros'
+        controller = subprocess.Popen([sys.executable, '-u', '-m', module, '--output', str(output)],
                                       env=env, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, bufsize=1, start_new_session=True)
         processes.append(controller)
@@ -175,6 +190,10 @@ def main():
         if lock_stream is not None:
             lock_stream.close()
         if failure_changes is not None:
+            if args.diagnostic_condition:
+                metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
+                failure_changes.update(diagnostic_valid=False,
+                    failure_tags=metadata.get('failure_tags', [])+['supervisor_'+failure_changes['termination_reason']])
             update_summary(output, **failure_changes)
         # Only report processes that had already exited before cleanup. Bridge
         # SIGINTs sent above must not be mistaken for the cause of a failure.
