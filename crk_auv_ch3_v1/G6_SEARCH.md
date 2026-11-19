@@ -145,3 +145,6 @@ Gazebo 接触、服务、控制与任务运行验收。后续 `.pt` 推理仍留
 
 独立的32步D2搜索重新分配诊断见 [D2_REASSIGNMENT_DIAGNOSTIC.md](D2_REASSIGNMENT_DIAGNOSTIC.md)。
 它必须显式启用；先运行baseline32并审阅，再运行defer条件，不构成完整搜索或模型验收。
+
+可恢复的逐艇进度提交适配器见 [PROGRESS_COMMIT_V1.md](PROGRESS_COMMIT_V1.md)。
+先完成独立短程工程夹具的到达/释放核对，再运行原搜索场景32步诊断；默认G6不自动启用。

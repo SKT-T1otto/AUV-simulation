@@ -19,9 +19,13 @@ from .scenario import select_scene
 from .native_source import activate_native
 from .vehicle import ROOT, load_profile
 from .reassignment_contract import CONDITIONS, SCHEMA, BUDGET, BOUNDARY, PREFIX_CRITERIA
+from .progress_commit import CONDITIONS as PROGRESS_CONDITIONS, FIXTURE_CONDITIONS, SCHEMA as PROGRESS_SCHEMA, prefix_criteria
 
 
-def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition=None):
+def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition=None, progress_condition=None):
+    if progress_condition is not None and (progress_condition not in PROGRESS_CONDITIONS or mode != 'search'
+            or scene is not None or diagnostic_condition is not None):
+        raise ValueError('Progress v1 requires explicit condition, original world, and separate entry')
     if diagnostic_condition is not None and (diagnostic_condition not in CONDITIONS or mode != 'search' or scene is not None):
         raise ValueError('Diagnostic v1 requires the original search fixture')
     lock = activate_native()
@@ -33,6 +37,8 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
     parent = output_root/'results/ch3'
     parent.mkdir(parents=True, exist_ok=True)
     prefix = 'search_'+mode if diagnostic_condition is None else 'd2_'+diagnostic_condition
+    if progress_condition:
+        prefix = 'progress_v1_'+progress_condition
     output = Path(tempfile.mkdtemp(prefix=prefix+'_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_', dir=parent))
     output.chmod(0o755)
     summary = dict(stage='G6', mode=mode, run_kind='zero_gazebo_closed_loop',
@@ -52,6 +58,13 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
             prefix_criteria=PREFIX_CRITERIA, diagnostic_valid=False,
             run_kind='d2_reassignment_diagnostic_gazebo',
             adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
+    if progress_condition:
+        summary.update(diagnostic_schema=PROGRESS_SCHEMA, diagnostic_condition=progress_condition,
+            diagnostic_budget=BUDGET, boundary_step=5 if progress_condition in FIXTURE_CONDITIONS else 20,
+            native_max_steps=400, prefix_criteria=prefix_criteria(progress_condition), diagnostic_valid=False,
+            run_kind='progress_fixture_gazebo' if progress_condition in FIXTURE_CONDITIONS else 'progress_search_gazebo',
+            adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest(),
+            synthetic_proposal_fixture=progress_condition in FIXTURE_CONDITIONS)
     for name, value in [('scenario.json', scene), ('truth_scene.json', truth),
                         ('vehicle_profile.json', profile), ('summary.json', summary)]:
         (output/name).write_text(json.dumps(value, indent=2, allow_nan=False)+'\n', encoding='utf-8')
@@ -75,6 +88,7 @@ def main():
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--scenario-id')
     parser.add_argument('--diagnostic-condition', choices=CONDITIONS)
+    parser.add_argument('--progress-condition', choices=PROGRESS_CONDITIONS)
     args = parser.parse_args()
     if args.scenario_id and not args.manifest:
         parser.error('--scenario-id requires --manifest')
@@ -82,11 +96,14 @@ def main():
         parser.error('--manifest requires --mode search')
     if args.diagnostic_condition and (args.mode != 'search' or args.manifest):
         parser.error('Diagnostic v1 requires --mode search and the original fixture')
+    if args.progress_condition and (args.mode != 'search' or args.manifest or args.diagnostic_condition):
+        parser.error('Progress v1 requires --mode search and no manifest/other diagnostic')
     output_root = Path(os.environ.get('CRK_OUTPUT_ROOT', '/home/legion/AUV-simulation')).resolve()
     if Path('/.dockerenv').is_file() and not output_root.is_mount():
         raise RuntimeError('Linux host output root is not mounted')
     scene = None if args.manifest is None else select_scene(json.loads(args.manifest.read_text(encoding='utf-8')), args.scenario_id)
-    output = create_assets(output_root, args.mode, scene, diagnostic_condition=args.diagnostic_condition)
+    output = create_assets(output_root, args.mode, scene, diagnostic_condition=args.diagnostic_condition,
+                           progress_condition=args.progress_condition)
     print(f'G6 results: {output}', flush=True)
     if args.generate_only:
         update_summary(output, run_kind='g6_assets_only')
@@ -131,6 +148,8 @@ def main():
         controller_log = (output/'controller.log').open('w', encoding='utf-8')
         streams.append(controller_log)
         module = 'crk_ch3.reassignment_ros' if args.diagnostic_condition else 'crk_ch3.search_ros'
+        if args.progress_condition:
+            module = 'crk_ch3.progress_fixture_ros' if args.progress_condition in FIXTURE_CONDITIONS else 'crk_ch3.reassignment_ros'
         controller = subprocess.Popen([sys.executable, '-u', '-m', module, '--output', str(output)],
                                       env=env, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, bufsize=1, start_new_session=True)
@@ -190,7 +209,7 @@ def main():
         if lock_stream is not None:
             lock_stream.close()
         if failure_changes is not None:
-            if args.diagnostic_condition:
+            if args.diagnostic_condition or args.progress_condition:
                 metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
                 failure_changes.update(diagnostic_valid=False,
                     failure_tags=metadata.get('failure_tags', [])+['supervisor_'+failure_changes['termination_reason']])

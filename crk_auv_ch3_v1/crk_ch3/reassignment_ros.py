@@ -17,6 +17,7 @@ from .reassignment_contract import SCHEMA, CONDITIONS, BUDGET, PREFIX_CRITERIA
 from .scenario import Frame
 from .vehicle import load_profile
 from .reassignment_report import write_run_report
+from .progress_commit import SCHEMA as PROGRESS_SCHEMA, SEARCH_CONDITIONS
 
 
 def map_counts(native):
@@ -36,7 +37,10 @@ def main():
     if not output.is_relative_to(root/'results/ch3'):
         raise ValueError('Diagnostic requires the mounted host results directory')
     summary = json.loads((output/'summary.json').read_text(encoding='utf-8'))
-    if (summary.get('diagnostic_schema') != SCHEMA or summary.get('diagnostic_condition') not in CONDITIONS
+    progress = summary.get('diagnostic_schema') == PROGRESS_SCHEMA
+    allowed = SEARCH_CONDITIONS if progress else CONDITIONS
+    schema = PROGRESS_SCHEMA if progress else SCHEMA
+    if (summary.get('diagnostic_schema') != schema or summary.get('diagnostic_condition') not in allowed
             or summary.get('diagnostic_budget') != BUDGET or summary.get('prefix_criteria') != PREFIX_CRITERIA):
         raise ValueError('Explicit versioned diagnostic assets are required')
     scene = json.loads((output/'scenario.json').read_text(encoding='utf-8'))
@@ -51,6 +55,7 @@ def main():
     node = plant = runtime = gate = None
     reason, completed, event_cursor = 'startup_failure', 0, 0
     failures = []
+    native_commit_steps = []
     try:
         node = ros.SearchNode(lambda event: record('physical_contacts.jsonl', event))
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -63,7 +68,14 @@ def main():
         runtime = ExternalMissionRuntime(scene, lambda request: plant(request))
         if runtime.config['max_steps'] != 400:
             raise DiagnosticInvalid('Native task max_steps must remain 400')
-        gate = ReassignmentGate(runtime, summary['diagnostic_condition'], record)
+        if progress and summary['diagnostic_condition'] == 'search_progress32':
+            from .progress_gate import ProgressCommitGate
+            gate = ProgressCommitGate(runtime, summary['diagnostic_condition'], record)
+        else:
+            condition = 'baseline32' if progress else summary['diagnostic_condition']
+            gate = ReassignmentGate(runtime, condition, record)
+            if progress:
+                gate.condition = summary['diagnostic_condition']
         native = runtime.env.unwrapped
         for name, data in [('resolved_config.json', runtime.config),
                            ('role_specs.json', runtime.env.get_public_vehicle_specs())]:
@@ -92,6 +104,10 @@ def main():
             record('step_start.jsonl', dict(step=runtime.step+1, applied_before_motion=before))
             result = runtime.advance()
             completed += 1
+            if progress:
+                native_result = normalized(gate.native_result) if hasattr(gate, 'native_result') else gate.last['applied_controller_result']
+                if native_result['replanned']:
+                    native_commit_steps.append(runtime.step)
             record('transitions.jsonl', dict(step=runtime.step,
                 physical_time_s=(node.clock_ns-epoch)/1e9,
                 condition=gate.condition, boundary_active=gate.active,
@@ -157,6 +173,15 @@ def main():
             summary.update(task_outcome=normalized(native.get_episode_result()),
                 task_success=bool(native.mission_complete), final_maps=map_counts(native))
             if gate is not None:
+                if progress:
+                    queue_events = getattr(getattr(gate, 'queue', None), 'events', [])
+                    summary.update(pending_before_stop=len(getattr(getattr(gate, 'queue', None), 'pending', {})),
+                        search_intent_commits=getattr(getattr(gate, 'queue', None), 'committed', 0),
+                        delayed_search_commits=sum(e['kind']=='COMMITTED' and e['committed_step']>e['proposed_step'] for e in queue_events),
+                        adapter_commit_steps=getattr(gate, 'adapter_commit_steps', []),
+                        native_commit_steps=native_commit_steps)
+                    if hasattr(gate, 'on_stop'):
+                        gate.on_stop(reason)
                 record('final_state.jsonl', dict(step=runtime.step, completed_steps=completed,
                     guidance=runtime.guidance, tracker=gate.trackers(),
                     allocation=runtime.controller.inner.current_allocation,
@@ -190,7 +215,11 @@ def main():
         for stream in streams.values():
             stream.close()
         try:
-            write_run_report(output)
+            if progress:
+                from .progress_report import write_run_report as progress_report
+                progress_report(output)
+            else:
+                write_run_report(output)
         except Exception as error:
             summary.update(report_error=str(error), diagnostic_valid=False, engineering_acceptance_passed=False)
             summary['failure_tags'].append('report_failure')
