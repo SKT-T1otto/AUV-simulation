@@ -15,6 +15,7 @@ def acceptance(summary):
         and summary.get('found_step') is not None and summary.get('handoff_decision_step') is not None
         and summary.get('capture_hold_max', 0) >= 5)
     return dict(engineering_acceptance_passed=bool(healthy),
-        g6_capture_acceptance_passed=bool(captured and summary.get('mode') == 'capture'),
+        g6_capture_acceptance_passed=bool(captured and summary.get('mode') == 'capture'
+            and summary.get('capture_evidence', {}).get('verified') is True),
         g6_search_acceptance_passed=bool(captured and summary.get('mode') == 'search'
                                        and summary.get('search_displacement_before_found_m', 0) >= .02))

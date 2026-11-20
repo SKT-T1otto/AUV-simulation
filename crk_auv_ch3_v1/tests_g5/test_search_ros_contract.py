@@ -152,6 +152,12 @@ class SearchRosTests(unittest.TestCase):
             self.assertEqual(status.exception.code, 0, (output/'summary.json').read_text())
             result = json.loads((output/'summary.json').read_text())
             self.assertTrue(result['g6_capture_acceptance_passed'])
+            trace = [json.loads(line) for line in (output/'capture_trace.jsonl').read_text().splitlines()]
+            self.assertEqual([row['native_hold'] for row in trace], [0, 1, 2, 3, 4, 5])
+            self.assertEqual(result['capture_evidence']['received_step'], 2)
+            self.assertEqual(result['capture_evidence']['final_consecutive_steps'], 5)
+            self.assertTrue(all(max(row['distance_start_m'], row['distance_end_m']) <= row['radius_m']
+                                for row in trace[1:]))
             self.assertFalse(result['g6_search_acceptance_passed'])
             self.assertEqual(result['completed_task_steps'], 6)
             self.assertEqual(result['control_steps'], 60)

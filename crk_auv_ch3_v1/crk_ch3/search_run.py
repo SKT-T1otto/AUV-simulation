@@ -58,6 +58,8 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
             prefix_criteria=PREFIX_CRITERIA, diagnostic_valid=False,
             run_kind='d2_reassignment_diagnostic_gazebo',
             adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
+    if mode == 'capture':
+        summary['adapter_manifest_sha256'] = hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest()
     if progress_condition:
         summary.update(diagnostic_schema=PROGRESS_SCHEMA, diagnostic_condition=progress_condition,
             diagnostic_budget=BUDGET, boundary_step=5 if progress_condition in FIXTURE_CONDITIONS else 20,

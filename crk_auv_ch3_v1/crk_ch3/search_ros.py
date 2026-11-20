@@ -19,6 +19,7 @@ from .mission_runtime import ExternalMissionRuntime
 from .mission_parity import normalized
 from .search_transport import SearchTransport, PlantFailure
 from .search_outcome import acceptance
+from .capture_evidence import capture_review, capture_sample
 from .scenario import Frame
 from .vehicle import load_profile
 
@@ -117,6 +118,8 @@ def main():
     node = plant = runtime = None
     reason, completed, last_map_step = 'startup_failure', 0, -1
     search_displacement_before_found = 0.
+    capture_rows = []
+    capture_mode = summary['mode'] == 'capture'
     try:
         node = SearchNode(lambda event: record('physical_contacts.jsonl', event))
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -154,9 +157,19 @@ def main():
         budget = 16 if summary['mode'] == 'smoke' else 400
         for _ in range(budget):
             node.check()
+            if capture_mode:
+                executor_start = Frame().inverse_position(plant.states[native.executor_idx].position)
+                target_start = native.target_state.position.tolist()
             result = runtime.advance()
             completed += 1
             task = runtime.env.get_task_state()
+            if capture_mode:
+                motion = result['motion']
+                sample = capture_sample(runtime.step, task, native, executor_start,
+                    motion['measured_positions_native'][native.executor_idx], target_start,
+                    motion['feedback_stamp_ns'])
+                record('capture_trace.jsonl', sample)
+                capture_rows.append(sample)
             if not task.target_found or runtime.found_step == runtime.step:
                 search_displacement_before_found = max(search_displacement_before_found,
                     float(np.max(np.linalg.norm(np.array([s.position for s in plant.states[:3]])
@@ -240,6 +253,8 @@ def main():
             contact_absence_proven=False,
             contact_monitor_status='ROS subscriptions plus event-only hull sensors; asynchronous coverage',
             physical_stop='zero command with bridge receipt and world pause; no settling rollout')
+        if capture_mode:
+            summary['capture_evidence'] = capture_review(capture_rows, summary)
         summary.update(acceptance(summary))
         (output/'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False)+'\n', encoding='utf-8')
         for stream in streams.values():
@@ -249,7 +264,11 @@ def main():
         rclpy.shutdown()
         print(f"G6 {reason}; engineering={summary['engineering_acceptance_passed']}; "
               f"task_success={summary.get('task_success', False)}; results={output}", flush=True)
-    raise SystemExit(0 if summary['engineering_acceptance_passed'] else 1)
+    if capture_mode:
+        print(f"Capture acceptance={summary['g6_capture_acceptance_passed']}; "
+              f"evidence={summary['capture_evidence']}", flush=True)
+    passed = summary['g6_capture_acceptance_passed'] if capture_mode else summary['engineering_acceptance_passed']
+    raise SystemExit(0 if passed else 1)
 
 
 if __name__ == '__main__':

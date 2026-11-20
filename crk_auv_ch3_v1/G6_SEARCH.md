@@ -56,6 +56,16 @@ bash /home/legion/AUV-simulation/source/tools/run_ch3_search.sh --mode capture
 capture 夹具使用与 G5 相同的近目标布局，检验任务链路；该夹具成功不能作为搜索
 性能数据。它仍用真实 Gazebo 反馈运行，不能用回放的第六步成功替代其实际结果。
 
+在 `summary.json` 中同时核对 `engineering_acceptance_passed=true`、
+`g6_capture_acceptance_passed=true` 和 `capture_evidence.verified=true`。
+`capture_trace.jsonl` 每个任务步写一行，记录发现者、执行艇收到信息的状态、
+执行艇两端的 Gazebo 实测位置、目标两端的位置和原生连续保持计数。坐标使用原生米制坐标系，
+目标位置只用于事后验收。发现后的下一步应收到交接；成功结束时应有连续五个任务步，
+每步起止距离均在配置半径内，且与原生保持计数一致。夹具中执行艇初始位置已在近目标半径内，
+因此该结果仅检验近距离交接与保持。这里的捕获指仿真任务的距离与时间判据。
+capture 模式的进程退出状态反映该模式的验收结果。未通过时保留部分日志，
+检查 `capture_evidence.failure_tags`、`termination_reason` 和 `controller.log`。
+
 两项通过后运行完整 ZERO 搜索：
 
 ```bash
