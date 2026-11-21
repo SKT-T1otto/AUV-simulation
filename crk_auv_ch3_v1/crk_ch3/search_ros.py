@@ -19,6 +19,7 @@ from .mission_runtime import ExternalMissionRuntime
 from .mission_parity import normalized
 from .search_transport import SearchTransport, PlantFailure
 from .search_outcome import acceptance
+from .initial_contract import CONDITIONS as INITIAL_CONDITIONS, BUDGET as INITIAL_BUDGET
 from .capture_evidence import capture_review, capture_sample
 from .scenario import Frame
 from .vehicle import load_profile
@@ -100,6 +101,7 @@ class SearchNode(MotionNode):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS)
     args = parser.parse_args()
     output = args.output.resolve()
     root = Path(os.environ.get('CRK_OUTPUT_ROOT', '/home/legion/AUV-simulation')).resolve()
@@ -107,6 +109,9 @@ def main():
         raise ValueError('G6 requires the configured Linux host results directory')
     summary = json.loads((output/'summary.json').read_text(encoding='utf-8'))
     scene = json.loads((output/'scenario.json').read_text(encoding='utf-8'))
+    initial = args.initial_condition
+    if initial != summary.get('initial_candidate_condition'):
+        raise ValueError('Initial candidate condition differs from supervisor assets')
     torch.set_num_threads(1)
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     streams = {}
@@ -132,7 +137,19 @@ def main():
             raise PlantFailure('Spawn/warmup state differs from scene by more than 0.02 m')
         # Native reset/planning does not call the motion callback. Bind the
         # actual plant only once ROS startup and marker initialization finish.
-        runtime = ExternalMissionRuntime(scene, lambda request: plant(request))
+        if initial:
+            from .initial_candidates import InitialCandidateRuntime
+            def diagnostic_motion(request):
+                record('motion_input.jsonl', runtime.request_evidence(request))
+                return plant(request)
+            runtime = InitialCandidateRuntime(scene, diagnostic_motion, initial)
+            (output/'admission.json').write_text(json.dumps(normalized(runtime.admission),
+                indent=2, allow_nan=False)+'\n', encoding='utf-8')
+            if not runtime.admission['reference_check']['valid']:
+                summary['comparison_invalid_reason'] = 'initial_reference_mismatch'
+                raise PlantFailure('Initial candidates, scores or public inputs disagree with the registered reference')
+        else:
+            runtime = ExternalMissionRuntime(scene, lambda request: plant(request))
         native = runtime.env.unwrapped
         (output/'resolved_config.json').write_text(json.dumps(normalized(runtime.config), indent=2)+'\n', encoding='utf-8')
         (output/'role_specs.json').write_text(json.dumps(normalized(runtime.env.get_public_vehicle_specs()), indent=2)+'\n', encoding='utf-8')
@@ -149,20 +166,33 @@ def main():
         # The existing odometry contract admits at most one physics-substep lag.
         if any(abs(s.stamp_ns-epoch_ns) > 2_000_000 for s in states):
             raise PlantFailure('Startup odometry does not match the confirmed paused epoch')
-        plant = SearchTransport(node, states, load_profile(),
-                                record=lambda row: record('control.jsonl', row),
+        def record_control(row):
+            if initial:
+                row['body_states'] = plant.states
+            record('control.jsonl', row)
+        plant = SearchTransport(node, states, load_profile(), record=record_control,
                                 realtime=os.environ.get('CRK_G6_REALTIME_VIEW') == '1')
         node.get_logger().info(f'G6 synchronized startup: warmup_ns={warmup_clock_ns}, epoch_ns={epoch_ns}')
         event_cursor = 0
         budget = 16 if summary['mode'] == 'smoke' else 400
+        if initial:
+            if native.max_steps != 400:
+                raise PlantFailure('Native task horizon differs from 400')
+            budget = INITIAL_BUDGET
         for _ in range(budget):
             node.check()
+            if initial:
+                record('step_start.jsonl', dict(step=runtime.step+1, clock_ns=node.clock_ns,
+                    installed=runtime.installed_state(), body_states=plant.states))
             if capture_mode:
                 executor_start = Frame().inverse_position(plant.states[native.executor_idx].position)
                 target_start = native.target_state.position.tolist()
             result = runtime.advance()
             completed += 1
             task = runtime.env.get_task_state()
+            if initial:
+                record('step_end.jsonl', dict(step=runtime.step, clock_ns=node.clock_ns,
+                    installed=runtime.installed_state(), body_states=plant.states))
             if capture_mode:
                 motion = result['motion']
                 sample = capture_sample(runtime.step, task, native, executor_start,
@@ -198,6 +228,8 @@ def main():
             if runtime.terminal:
                 break
         reason = 'task_terminal' if runtime.terminal else 'smoke_completed'
+        if initial and not runtime.terminal:
+            reason = 'diagnostic_budget_completed'
     except KeyboardInterrupt:
         reason = 'interrupted'
     except PhysicalContact as error:
@@ -256,6 +288,13 @@ def main():
         if capture_mode:
             summary['capture_evidence'] = capture_review(capture_rows, summary)
         summary.update(acceptance(summary))
+        if initial:
+            completed_budget = reason == 'diagnostic_budget_completed' and completed == INITIAL_BUDGET
+            # Apply the usual engineering predicates to a completed diagnostic budget.
+            healthy = acceptance(dict(summary, termination_reason='smoke_completed'))['engineering_acceptance_passed']
+            summary.update(diagnostic_valid=bool(completed_budget and healthy),
+                engineering_acceptance_passed=bool(completed_budget and healthy),
+                g6_search_acceptance_passed=False, g6_capture_acceptance_passed=False)
         (output/'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False)+'\n', encoding='utf-8')
         for stream in streams.values():
             stream.close()

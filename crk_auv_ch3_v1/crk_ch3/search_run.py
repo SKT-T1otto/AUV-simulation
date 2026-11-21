@@ -20,9 +20,20 @@ from .native_source import activate_native
 from .vehicle import ROOT, load_profile
 from .reassignment_contract import CONDITIONS, SCHEMA, BUDGET, BOUNDARY, PREFIX_CRITERIA
 from .progress_commit import CONDITIONS as PROGRESS_CONDITIONS, FIXTURE_CONDITIONS, SCHEMA as PROGRESS_SCHEMA, prefix_criteria
+from .initial_contract import CONDITIONS as INITIAL_CONDITIONS, SCHEMA as INITIAL_SCHEMA, CRITERIA
 
 
-def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition=None, progress_condition=None):
+def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition=None, progress_condition=None,
+                  initial_condition=None, pair_directory=None):
+    if initial_condition or pair_directory is not None:
+        if (initial_condition not in INITIAL_CONDITIONS or mode != 'search' or scene is not None
+                or diagnostic_condition or progress_condition or pair_directory is None):
+            raise ValueError('Initial pair requires the original search fixture and an explicit batch directory')
+        parent = (output_root/'results/ch3').resolve()
+        pair_directory = Path(pair_directory)
+        if (pair_directory.is_symlink() or pair_directory.resolve().parent != parent
+                or not pair_directory.name.startswith('g6_initial_candidates_pair_') or not pair_directory.is_dir()):
+            raise ValueError('Invalid initial pair directory')
     if progress_condition is not None and (progress_condition not in PROGRESS_CONDITIONS or mode != 'search'
             or scene is not None or diagnostic_condition is not None):
         raise ValueError('Progress v1 requires explicit condition, original world, and separate entry')
@@ -39,7 +50,11 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
     prefix = 'search_'+mode if diagnostic_condition is None else 'd2_'+diagnostic_condition
     if progress_condition:
         prefix = 'progress_v1_'+progress_condition
-    output = Path(tempfile.mkdtemp(prefix=prefix+'_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_', dir=parent))
+    if initial_condition:
+        output = pair_directory / initial_condition
+        output.mkdir(exist_ok=False)
+    else:
+        output = Path(tempfile.mkdtemp(prefix=prefix+'_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'_', dir=parent))
     output.chmod(0o755)
     summary = dict(stage='G6', mode=mode, run_kind='zero_gazebo_closed_loop',
         engineering_fixture='engineering' in scene.get('purpose', ''),
@@ -60,6 +75,11 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
             adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
     if mode == 'capture':
         summary['adapter_manifest_sha256'] = hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest()
+    if initial_condition:
+        summary.update(diagnostic_schema=INITIAL_SCHEMA, initial_candidate_condition=initial_condition,
+            batch_id=pair_directory.name, diagnostic_budget=32, native_max_steps=400, diagnostic_valid=False,
+            prefix_criteria=CRITERIA, run_kind='initial_candidate_pair_gazebo',
+            adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
     if progress_condition:
         summary.update(diagnostic_schema=PROGRESS_SCHEMA, diagnostic_condition=progress_condition,
             diagnostic_budget=BUDGET, boundary_step=5 if progress_condition in FIXTURE_CONDITIONS else 20,
@@ -91,6 +111,8 @@ def main():
     parser.add_argument('--scenario-id')
     parser.add_argument('--diagnostic-condition', choices=CONDITIONS)
     parser.add_argument('--progress-condition', choices=PROGRESS_CONDITIONS)
+    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS)
+    parser.add_argument('--pair-directory', type=Path)
     args = parser.parse_args()
     if args.scenario_id and not args.manifest:
         parser.error('--scenario-id requires --manifest')
@@ -105,7 +127,8 @@ def main():
         raise RuntimeError('Linux host output root is not mounted')
     scene = None if args.manifest is None else select_scene(json.loads(args.manifest.read_text(encoding='utf-8')), args.scenario_id)
     output = create_assets(output_root, args.mode, scene, diagnostic_condition=args.diagnostic_condition,
-                           progress_condition=args.progress_condition)
+                           progress_condition=args.progress_condition, initial_condition=args.initial_condition,
+                           pair_directory=args.pair_directory)
     print(f'G6 results: {output}', flush=True)
     if args.generate_only:
         update_summary(output, run_kind='g6_assets_only')
@@ -124,6 +147,8 @@ def main():
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_stream = lock_path.open('a')
         fcntl.flock(lock_stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if args.initial_condition and (output.parent/'CANCEL').exists():
+            raise KeyboardInterrupt
         with (output/'sdf_validation.log').open('w') as log:
             valid = subprocess.run(['gz', 'sdf', '-k', str(output/'world.sdf')], stdout=log,
                                    stderr=subprocess.STDOUT, timeout=30)
@@ -131,7 +156,8 @@ def main():
         if valid.returncode != 0:
             raise RuntimeError('SDF validation failed; see sdf_validation.log')
         bridge = str(Path(get_package_prefix('ros_gz_bridge'))/'lib/ros_gz_bridge/parameter_bridge')
-        env = {**os.environ, 'GZ_PARTITION': 'crk_g6_'+output.name, 'ROS_DOMAIN_ID': '76',
+        partition = output.parent.name+'_'+output.name if args.initial_condition else output.name
+        env = {**os.environ, 'GZ_PARTITION': 'crk_g6_'+partition, 'ROS_DOMAIN_ID': '76',
                'ROS_LOCALHOST_ONLY': '1', 'ROS_LOG_DIR': str(output/'ros_logs'),
                'CRK_G6_REALTIME_VIEW': '0' if args.headless else '1'}
         def launch(command, filename):
@@ -152,7 +178,8 @@ def main():
         module = 'crk_ch3.reassignment_ros' if args.diagnostic_condition else 'crk_ch3.search_ros'
         if args.progress_condition:
             module = 'crk_ch3.progress_fixture_ros' if args.progress_condition in FIXTURE_CONDITIONS else 'crk_ch3.reassignment_ros'
-        controller = subprocess.Popen([sys.executable, '-u', '-m', module, '--output', str(output)],
+        options = ['--initial-condition', args.initial_condition] if args.initial_condition else []
+        controller = subprocess.Popen([sys.executable, '-u', '-m', module, '--output', str(output), *options],
                                       env=env, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, bufsize=1, start_new_session=True)
         processes.append(controller)
@@ -166,6 +193,8 @@ def main():
         reader.start()
         deadline = time.monotonic()+1800
         while controller.poll() is None:
+            if args.initial_condition and (output.parent/'CANCEL').exists():
+                raise KeyboardInterrupt
             if time.monotonic() >= deadline:
                 raise TimeoutError('G6 wall-time limit exceeded (1800 seconds)')
             failed_processes = [dict(log=filename, exit_code=p.returncode)
@@ -206,12 +235,46 @@ def main():
                     process.wait()
         if reader is not None:
             reader.join(timeout=3)
+        if args.initial_condition:
+            # A group leader can exit while its simulator child is winding down.
+            # Check only the session groups created in this run, under the motion lock.
+            def live(group):
+                for stat in Path('/proc').glob('[0-9]*/stat'):
+                    try:
+                        fields = stat.read_text().rsplit(')', 1)[1].split()
+                        if fields[0] != 'Z' and int(fields[2]) == group:
+                            return True
+                    except (OSError, IndexError, ValueError):
+                        continue
+                return False
+            groups = [p.pid for p in processes]
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                pending = [g for g in groups if live(g)]
+                if not pending:
+                    break
+                for group in pending:
+                    try:
+                        os.killpg(group, sig)
+                    except ProcessLookupError:
+                        pass
+                end = time.monotonic()+3
+                while time.monotonic()<end and any(live(g) for g in pending):
+                    time.sleep(.1)
+            if reader is not None:
+                reader.join(timeout=3)
+            clean = (reader is None or not reader.is_alive()) and all(
+                p.poll() is not None and not live(p.pid) for p in processes)
+            update_summary(output, supervisor_cleanup=dict(verified=clean, groups=groups,
+                exit_codes=[p.returncode for p in processes]))
+            if not clean:
+                result = 1
+                failure_changes = dict(termination_reason='subprocess_cleanup_failure', engineering_acceptance_passed=False)
         for stream in streams:
             stream.close()
         if lock_stream is not None:
             lock_stream.close()
         if failure_changes is not None:
-            if args.diagnostic_condition or args.progress_condition:
+            if args.diagnostic_condition or args.progress_condition or args.initial_condition:
                 metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
                 failure_changes.update(diagnostic_valid=False,
                     failure_tags=metadata.get('failure_tags', [])+['supervisor_'+failure_changes['termination_reason']])
