@@ -172,7 +172,8 @@ def archive(batch, scratch):
     if links:
         index = batch / 'archive_links.json'
         write(index, links)
-        paths.append(index)
+        if index not in paths:
+            paths.append(index)
     sums = {p.relative_to(batch).as_posix(): file_hash(p) for p in paths}
     manifest = batch / 'SHA256SUMS'
     manifest.write_bytes(''.join(h + '  ' + name + '\n' for name, h in sums.items()).encode())

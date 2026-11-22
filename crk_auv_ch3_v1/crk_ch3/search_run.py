@@ -21,18 +21,20 @@ from .vehicle import ROOT, load_profile
 from .reassignment_contract import CONDITIONS, SCHEMA, BUDGET, BOUNDARY, PREFIX_CRITERIA
 from .progress_commit import CONDITIONS as PROGRESS_CONDITIONS, FIXTURE_CONDITIONS, SCHEMA as PROGRESS_SCHEMA, prefix_criteria
 from .initial_contract import CONDITIONS as INITIAL_CONDITIONS, SCHEMA as INITIAL_SCHEMA, CRITERIA
+from .initial_contract import FULL_CONDITIONS, FULL_PREFIX, FULL_SCHEMA, HORIZON
 
 
 def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition=None, progress_condition=None,
                   initial_condition=None, pair_directory=None):
     if initial_condition or pair_directory is not None:
-        if (initial_condition not in INITIAL_CONDITIONS or mode != 'search' or scene is not None
+        if (initial_condition not in INITIAL_CONDITIONS + FULL_CONDITIONS or mode != 'search' or scene is not None
                 or diagnostic_condition or progress_condition or pair_directory is None):
             raise ValueError('Initial pair requires the original search fixture and an explicit batch directory')
         parent = (output_root/'results/ch3').resolve()
         pair_directory = Path(pair_directory)
+        batch_prefix = FULL_PREFIX if initial_condition in FULL_CONDITIONS else 'g6_initial_candidates_pair_'
         if (pair_directory.is_symlink() or pair_directory.resolve().parent != parent
-                or not pair_directory.name.startswith('g6_initial_candidates_pair_') or not pair_directory.is_dir()):
+                or not pair_directory.name.startswith(batch_prefix) or not pair_directory.is_dir()):
             raise ValueError('Invalid initial pair directory')
     if progress_condition is not None and (progress_condition not in PROGRESS_CONDITIONS or mode != 'search'
             or scene is not None or diagnostic_condition is not None):
@@ -76,10 +78,14 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
     if mode == 'capture':
         summary['adapter_manifest_sha256'] = hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest()
     if initial_condition:
-        summary.update(diagnostic_schema=INITIAL_SCHEMA, initial_candidate_condition=initial_condition,
-            batch_id=pair_directory.name, diagnostic_budget=32, native_max_steps=400, diagnostic_valid=False,
-            prefix_criteria=CRITERIA, run_kind='initial_candidate_pair_gazebo',
+        summary.update(initial_candidate_condition=initial_condition, batch_id=pair_directory.name,
+            native_max_steps=HORIZON, prefix_criteria=CRITERIA,
             adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
+        if initial_condition in FULL_CONDITIONS:
+            summary.update(pair_schema=FULL_SCHEMA, run_kind='far_search_pair400_gazebo')
+        else:
+            summary.update(diagnostic_schema=INITIAL_SCHEMA, diagnostic_budget=32, diagnostic_valid=False,
+                           run_kind='initial_candidate_pair_gazebo')
     if progress_condition:
         summary.update(diagnostic_schema=PROGRESS_SCHEMA, diagnostic_condition=progress_condition,
             diagnostic_budget=BUDGET, boundary_step=5 if progress_condition in FIXTURE_CONDITIONS else 20,
@@ -111,7 +117,7 @@ def main():
     parser.add_argument('--scenario-id')
     parser.add_argument('--diagnostic-condition', choices=CONDITIONS)
     parser.add_argument('--progress-condition', choices=PROGRESS_CONDITIONS)
-    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS)
+    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS + FULL_CONDITIONS)
     parser.add_argument('--pair-directory', type=Path)
     args = parser.parse_args()
     if args.scenario_id and not args.manifest:
@@ -191,12 +197,13 @@ def main():
                 print(line, end='', flush=True)
         reader = threading.Thread(target=forward, daemon=True)
         reader.start()
-        deadline = time.monotonic()+1800
+        wall_seconds = 7200 if args.initial_condition in FULL_CONDITIONS else 1800
+        deadline = time.monotonic()+wall_seconds
         while controller.poll() is None:
             if args.initial_condition and (output.parent/'CANCEL').exists():
                 raise KeyboardInterrupt
             if time.monotonic() >= deadline:
-                raise TimeoutError('G6 wall-time limit exceeded (1800 seconds)')
+                raise TimeoutError(f'G6 wall-time limit exceeded ({wall_seconds} seconds)')
             failed_processes = [dict(log=filename, exit_code=p.returncode)
                                 for p, filename in process_logs[:-1] if p.poll() is not None]
             if failed_processes:
@@ -268,7 +275,8 @@ def main():
                 exit_codes=[p.returncode for p in processes]))
             if not clean:
                 result = 1
-                failure_changes = dict(termination_reason='subprocess_cleanup_failure', engineering_acceptance_passed=False)
+                failure_changes = dict(termination_reason='subprocess_cleanup_failure', engineering_acceptance_passed=False,
+                                       g6_search_acceptance_passed=False, g6_capture_acceptance_passed=False)
         for stream in streams:
             stream.close()
         if lock_stream is not None:

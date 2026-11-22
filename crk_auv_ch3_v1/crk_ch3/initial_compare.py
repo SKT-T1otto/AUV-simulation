@@ -1,7 +1,7 @@
 """Paired physical effects on each original route. All times are relative to the confirmed epoch."""
 
 import math
-from .initial_contract import BUDGET, COMMON, CONDITIONS, CRITERIA as C, NEXT
+from .initial_contract import COMMON, CRITERIA as C, NEXT
 from .initial_records import CONTROL_NS, signature, target
 from .scenario import Frame
 
@@ -135,7 +135,7 @@ def pair(a, b):
 def compare_agent(a, b, i, epochs, shared, initial):
     cases = (a, b)
     change = [replacement(c, i) for c in cases]
-    limit = min([BUDGET] + [v for v in change if v is not None])
+    limit = min([len(c['start']) for c in cases] + [v for v in change if v is not None])
     axis = unit(sub(NEXT[1][i], NEXT[0][i]))
     starts = [c['start'][0]['body_states'][i]['position'] for c in cases]
     noise = abs(dot(sub(starts[1], starts[0]), axis))
@@ -243,7 +243,7 @@ def compare_agent(a, b, i, epochs, shared, initial):
         label = 'insufficient'
     routes = {}
     for c, swap in zip(cases, change):
-        metrics = route_metrics(c, i, swap or BUDGET)
+        metrics = route_metrics(c, i, swap or len(c['start']))
         routes[c['condition']] = dict(
             common_window=route_metrics(c, i, limit),
             own_initial_route=metrics,

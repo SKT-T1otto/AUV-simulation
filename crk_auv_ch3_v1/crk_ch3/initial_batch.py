@@ -11,7 +11,7 @@ import sys
 import time
 
 from .initial_compare import pair
-from .initial_contract import CONDITIONS, check_admission
+from .initial_contract import CONDITIONS, FULL_CONDITIONS, FULL_PREFIX, check_admission
 from .initial_records import load_case, read, write
 from .initial_package import archive, file_hash, reports
 
@@ -27,9 +27,9 @@ def command(args):
     return done.stdout.strip()
 
 
-def reserve(parent):
+def reserve(parent, prefix='g6_initial_candidates_pair_'):
     name = (
-        'g6_initial_candidates_pair_'
+        prefix
         + datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%SZ_')
         + secrets.token_hex(5)
     )
@@ -52,6 +52,9 @@ def reserve(parent):
 class DockerCases:
     environment = 'Linux/Gazebo'
 
+    def __init__(self, full=False):
+        self.full = full
+
     def prepare(self, batch, meta):
         meta['git_sha'] = command(['git', '-C', str(PROJECT), 'rev-parse', 'HEAD'])
         code = PROJECT / 'crk_auv_ch3_v1'
@@ -61,7 +64,8 @@ class DockerCases:
             if file_hash(code / name) != expected:
                 raise ValueError('Source manifest mismatch: ' + name)
         meta['adapter_manifest_sha256'] = file_hash(manifest)
-        paths = ['crk_auv_ch3_v1', 'tools/run_ch3_initial_candidates_pair.sh']
+        entry = 'run_ch3_far_search_pair400.sh' if self.full else 'run_ch3_initial_candidates_pair.sh'
+        paths = ['crk_auv_ch3_v1', 'tools/' + entry]
         if command(['git', '-C', str(PROJECT), 'status', '--porcelain', '--', *paths]):
             raise ValueError('Source differs from the reported Git revision')
         format_string = (
@@ -135,14 +139,15 @@ class DockerCases:
     @staticmethod
     def wait_for_runner(batch, condition, done):
         started = time.monotonic()
+        wall_limit = 7500 if condition in FULL_CONDITIONS else 2100
         next_probe = started + 20
         while not done.is_file():
             now = time.monotonic()
             if now - started > 60 and not (batch / (condition + '.runner.log')).exists():
                 raise RuntimeError('Detached wrapper did not open its log; simulator startup unverified')
-            if now - started > 2100 and not (batch / 'CANCEL').exists():
+            if now - started > wall_limit and not (batch / 'CANCEL').exists():
                 (batch / 'CANCEL').write_text('fault: batch_wall_timeout\n')
-            if now - started > 2250:
+            if now - started > wall_limit + 150:
                 raise TimeoutError('Container runner status missing; cleanup unverified')
             if now >= next_probe:
                 if (
@@ -155,12 +160,12 @@ class DockerCases:
         return int(done.read_text().strip())
 
 
-def execute(batch, engine, meta, log):
+def execute(batch, engine, meta, log, compare=pair):
     loaded = []
     result = None
     try:
         engine.prepare(batch, meta)
-        for condition in CONDITIONS:
+        for condition in meta['conditions']:
             if (batch / 'CANCEL').exists():
                 raise InterruptedError('Batch cancelled before ' + condition)
             entry = meta['cases'][condition] = {'status': 'started'}
@@ -197,13 +202,20 @@ def execute(batch, engine, meta, log):
                 raise RuntimeError(
                     f"{condition} exit {rc}: {entry.get('termination_reason')} {entry.get('error') or ''}"
                 )
-            case = load_case(directory, condition)
+            try:
+                case = load_case(directory, condition)
+            except (ValueError, KeyError, OSError) as error:
+                if condition in FULL_CONDITIONS:
+                    entry.update(status='invalid_evidence', verification_error=str(error))
+                raise
             if case['summary']['adapter_manifest_sha256'] != meta['adapter_manifest_sha256']:
                 raise ValueError('Host/container adapter manifest mismatch')
             entry.update(status='valid', reference_valid=True)
+            if 'mission' in case:
+                entry['mission'] = case['mission']
             loaded.append(case)
             log(condition + ' validated, simulator cleanup confirmed')
-        result = pair(*loaded)
+        result = compare(*loaded)
         if not result['valid']:
             raise ValueError('Initial-state or per-vehicle common-phase comparability insufficient')
         meta.update(status='completed', reason='两组均通过工程与可比性核验。')
@@ -214,7 +226,8 @@ def execute(batch, engine, meta, log):
             meta['status'] = 'interrupted'
         else:
             invalid_reference = any(e.get('reference_valid') is False for e in meta['cases'].values())
-            meta['status'] = 'insufficient' if result is not None or invalid_reference else 'failed'
+            invalid_evidence = any(e['status'] == 'invalid_evidence' for e in meta['cases'].values())
+            meta['status'] = 'insufficient' if result is not None or invalid_reference or invalid_evidence else 'failed'
         meta['reason'] = f'{type(error).__name__}: {error}'
         for name, entry in meta['cases'].items():
             if entry['status'] == 'started':
@@ -258,7 +271,11 @@ def export_zip(source, folder, digest):
     return destination
 
 
-def run_batch(batch, engine, export_dir=None):
+def run_batch(batch, engine, export_dir=None, *, full=False):
+    compare, report = pair, reports
+    if full:
+        from .far_pair import compare_full, report_full
+        compare, report = compare_full, report_full
     meta = dict(
         batch_id=batch.name,
         environment=engine.environment,
@@ -266,7 +283,7 @@ def run_batch(batch, engine, export_dir=None):
         status='started',
         cases={},
         reason='',
-        conditions=list(CONDITIONS),
+        conditions=list(FULL_CONDITIONS if full else CONDITIONS),
     )
 
     def log(msg):
@@ -276,13 +293,19 @@ def run_batch(batch, engine, export_dir=None):
             print(msg, file=f)
 
     log('batch ' + batch.name)
-    result = execute(batch, engine, meta, log)
+    result = execute(batch, engine, meta, log, compare)
     if (batch / 'CANCEL').exists() and meta['status'] == 'completed':
         meta.update(status='interrupted', reason='Batch interrupted before archive publication')
     log(meta['status'] + ' ' + meta['reason'])
-    reports(batch, meta, result)
+    report(batch, meta, result)
     temporary = batch / '.evidence.partial'
     digest = archive(batch, temporary)
+    if full and (batch / 'CANCEL').exists() and meta['status'] == 'completed':
+        meta.update(status='interrupted', reason='Cancellation received during report or ZIP preparation')
+        log(meta['reason'])
+        report(batch, meta, result)
+        temporary.unlink()
+        digest = archive(batch, temporary)
     destination = batch.parent / (batch.name + '.zip')
     temporary.chmod(0o644)
     try:
@@ -314,12 +337,12 @@ def run_batch(batch, engine, export_dir=None):
     return 0 if status == 'completed' else (130 if meta['status'] == 'interrupted' else 1)
 
 
-def main():
+def main(*, full=False):
     if len(sys.argv) != 1 or not sys.platform.startswith('linux') or Path('/.dockerenv').exists():
         raise SystemExit(
-            'Run tools/run_ch3_initial_candidates_pair.sh without arguments on the Ubuntu host'
+            'Run the pair launcher without arguments on the Ubuntu host'
         )
-    batch = reserve(ROOT / 'results/ch3')
+    batch = reserve(ROOT / 'results/ch3', FULL_PREFIX) if full else reserve(ROOT / 'results/ch3')
 
     def cancel(sig, _frame):
         if not (batch / 'CANCEL').exists():
@@ -328,7 +351,7 @@ def main():
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, cancel)
-    raise SystemExit(run_batch(batch, DockerCases(), os.environ.get('CRK_EXPORT_DIR')))
+    raise SystemExit(run_batch(batch, DockerCases(full), os.environ.get('CRK_EXPORT_DIR'), full=full))
 
 
 if __name__ == '__main__':

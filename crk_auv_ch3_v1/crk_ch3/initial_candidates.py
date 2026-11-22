@@ -4,7 +4,7 @@ from contextlib import ExitStack
 import numpy as np
 from .mission_runtime import ExternalMissionRuntime
 from .mission_parity import normalized
-from .initial_contract import CONDITIONS, check_admission
+from .initial_contract import CONDITIONS, admission_rule, check_admission
 from chapter3_bser.candidate_generator import _ordered_pool, _separated
 from chapter3_bser.d2.controller import D2SearchController
 from chapter3_bser.safety.planning_refresh import start_status
@@ -88,8 +88,7 @@ def candidate_row(c):
 
 class InitialCandidateRuntime(ExternalMissionRuntime):
     def __init__(self, scene, callback, condition):
-        if condition not in CONDITIONS:
-            raise ValueError('Unknown initial candidate condition')
+        self.use_quadrants = admission_rule(condition) == CONDITIONS[1]
         self.condition = condition
         self.initialize_calls = self.special_pool_calls = 0
         self.admission = None
@@ -152,7 +151,7 @@ class InitialCandidateRuntime(ExternalMissionRuntime):
 
         with ExitStack() as scope:
             for key, fn in [('_audit_candidate_generation_observer', observe)] + (
-                [('search_pool', select)] if self.condition == CONDITIONS[1] else []
+                [('search_pool', select)] if self.use_quadrants else []
             ):
                 if key in vars(allocator):
                     raise RuntimeError('Unexpected preinstalled allocator hook')
@@ -226,7 +225,7 @@ class InitialCandidateRuntime(ExternalMissionRuntime):
                 target = g.hold_position if g.hold_state else g.tracking_waypoint
                 if not np.allclose(nav[i], target, atol=1e-6, rtol=0):
                     raise RuntimeError('Applied navigation target differs from installed guidance')
-            if self.special_pool_calls != int(self.condition == CONDITIONS[1]) or 'search_pool' in vars(
+            if self.special_pool_calls != int(self.use_quadrants) or 'search_pool' in vars(
                 self.controller.inner.allocator
             ):
                 raise RuntimeError('Initial admission still active after initialization')

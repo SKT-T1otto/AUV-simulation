@@ -6,6 +6,20 @@ from .contracts import canonical_hash
 SCHEMA = 'crk.g6.initial_candidate_pair.v1'
 CONDITIONS = ('initial_original32', 'initial_quadrant32')
 BUDGET = 32
+FULL_CONDITIONS = ('initial_original400', 'initial_quadrant400')
+FULL_SCHEMA = 'crk.g6.far_search_pair400.v1'
+FULL_PREFIX = 'g6_far_search_pair400_'
+HORIZON = 400
+
+
+def admission_rule(condition):
+    if condition in FULL_CONDITIONS:
+        return CONDITIONS[FULL_CONDITIONS.index(condition)]
+    if condition in CONDITIONS:
+        return condition
+    raise ValueError('Unknown initial candidate condition: ' + str(condition))
+
+
 CRITERIA = dict(
     initial_position_m=0.002,
     initial_velocity_m_s=0.01,
@@ -89,14 +103,15 @@ STANDBY_COSTS = (
 
 
 def check_admission(data, condition):
-    gold = GOLD[condition]
+    rule = admission_rule(condition)
+    gold = GOLD[rule]
     candidates = data['candidates']
     admitted = [[c['id'], c['pool_rank'], c['source'], c['waypoint']] for c in candidates]
     chosen = [[c['id'], c['waypoint'], c['path']] for c in candidates if c['selected']]
     standby = data['executor']
     chosen.append([standby['source'], standby['target_region'], standby['path']])
     ys = [[y['id'], y['source'], y['waypoint'], y['path']] for y in data['standbys']]
-    original = condition == CONDITIONS[0]
+    original = rule == CONDITIONS[0]
     expected_cells = [0, 5, 1, 13] if original else [0, 40, 400, 440]
     expected_ends = (
         [[1, 3, 5.5], [1, 1, 5.5], [1, 1, 5.5]]
@@ -114,14 +129,14 @@ def check_admission(data, condition):
         public_inputs=data['fingerprints'] == FINGERPRINTS,
         condition=data['condition'] == condition,
         once=data['initialize_calls'] == 1
-        and data['special_pool_calls'] == int(condition == CONDITIONS[1]),
+        and data['special_pool_calls'] == int(not original),
         scope_released=data['native_pool_restored'],
         public_pool_count=data['pool_count'] == 800,
     )
     delta = {
         key: data['scores'][key] - gold[key] for key in ('objective', 'joint_score', 'response_time')
     }
-    costs = ORIGINAL_COSTS if condition == CONDITIONS[0] else QUADRANT_COSTS
+    costs = ORIGINAL_COSTS if original else QUADRANT_COSTS
     fields = ('length_m', 'planning_cost', 'native_travel_s')
     travel_deltas = {
         c['id']: {k: c[k] - v for k, v in zip(fields, expected)}

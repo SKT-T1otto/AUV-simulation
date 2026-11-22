@@ -20,6 +20,7 @@ from .mission_parity import normalized
 from .search_transport import SearchTransport, PlantFailure
 from .search_outcome import acceptance
 from .initial_contract import CONDITIONS as INITIAL_CONDITIONS, BUDGET as INITIAL_BUDGET
+from .initial_contract import FULL_CONDITIONS, HORIZON
 from .capture_evidence import capture_review, capture_sample
 from .scenario import Frame
 from .vehicle import load_profile
@@ -101,7 +102,7 @@ class SearchNode(MotionNode):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS)
+    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS + FULL_CONDITIONS)
     args = parser.parse_args()
     output = args.output.resolve()
     root = Path(os.environ.get('CRK_OUTPUT_ROOT', '/home/legion/AUV-simulation')).resolve()
@@ -110,6 +111,7 @@ def main():
     summary = json.loads((output/'summary.json').read_text(encoding='utf-8'))
     scene = json.loads((output/'scenario.json').read_text(encoding='utf-8'))
     initial = args.initial_condition
+    full_pair = initial in FULL_CONDITIONS
     if initial != summary.get('initial_candidate_condition'):
         raise ValueError('Initial candidate condition differs from supervisor assets')
     torch.set_num_threads(1)
@@ -151,6 +153,9 @@ def main():
         else:
             runtime = ExternalMissionRuntime(scene, lambda request: plant(request))
         native = runtime.env.unwrapped
+        if full_pair:
+            summary['native_detect_radii_m'] = [
+                float(r.item()) + float(native.detect_eps_bias) for r in native._sensor_range[:3]]
         (output/'resolved_config.json').write_text(json.dumps(normalized(runtime.config), indent=2)+'\n', encoding='utf-8')
         (output/'role_specs.json').write_text(json.dumps(normalized(runtime.env.get_public_vehicle_specs()), indent=2)+'\n', encoding='utf-8')
         native.enable_public_event_capture('g6', capacity=2048)
@@ -176,15 +181,15 @@ def main():
         event_cursor = 0
         budget = 16 if summary['mode'] == 'smoke' else 400
         if initial:
-            if native.max_steps != 400:
+            if native.max_steps != HORIZON:
                 raise PlantFailure('Native task horizon differs from 400')
-            budget = INITIAL_BUDGET
+            budget = native.max_steps if full_pair else INITIAL_BUDGET
         for _ in range(budget):
             node.check()
             if initial:
                 record('step_start.jsonl', dict(step=runtime.step+1, clock_ns=node.clock_ns,
                     installed=runtime.installed_state(), body_states=plant.states))
-            if capture_mode:
+            if capture_mode or full_pair:
                 executor_start = Frame().inverse_position(plant.states[native.executor_idx].position)
                 target_start = native.target_state.position.tolist()
             result = runtime.advance()
@@ -193,7 +198,7 @@ def main():
             if initial:
                 record('step_end.jsonl', dict(step=runtime.step, clock_ns=node.clock_ns,
                     installed=runtime.installed_state(), body_states=plant.states))
-            if capture_mode:
+            if capture_mode or full_pair:
                 motion = result['motion']
                 sample = capture_sample(runtime.step, task, native, executor_start,
                     motion['measured_positions_native'][native.executor_idx], target_start,
@@ -228,7 +233,9 @@ def main():
             if runtime.terminal:
                 break
         reason = 'task_terminal' if runtime.terminal else 'smoke_completed'
-        if initial and not runtime.terminal:
+        if full_pair and not runtime.terminal:
+            reason = 'native_terminal_missing_at_horizon'
+        elif initial and not runtime.terminal:
             reason = 'diagnostic_budget_completed'
     except KeyboardInterrupt:
         reason = 'interrupted'
@@ -285,10 +292,10 @@ def main():
             contact_absence_proven=False,
             contact_monitor_status='ROS subscriptions plus event-only hull sensors; asynchronous coverage',
             physical_stop='zero command with bridge receipt and world pause; no settling rollout')
-        if capture_mode:
+        if capture_mode or (full_pair and summary.get('task_success')):
             summary['capture_evidence'] = capture_review(capture_rows, summary)
         summary.update(acceptance(summary))
-        if initial:
+        if initial in INITIAL_CONDITIONS:
             completed_budget = reason == 'diagnostic_budget_completed' and completed == INITIAL_BUDGET
             # Apply the usual engineering predicates to a completed diagnostic budget.
             healthy = acceptance(dict(summary, termination_reason='smoke_completed'))['engineering_acceptance_passed']
