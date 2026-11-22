@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 
+from .standby_geometry import CONDITIONS as STANDBY, PREFIX as STANDBY_PREFIX
 from .initial_compare import pair
 from .initial_contract import CONDITIONS, FULL_CONDITIONS, FULL_PREFIX, check_admission
 from .initial_records import load_case, read, write
@@ -52,7 +53,8 @@ def reserve(parent, prefix='g6_initial_candidates_pair_'):
 class DockerCases:
     environment = 'Linux/Gazebo'
 
-    def __init__(self, full=False):
+    def __init__(self, full=False, standby=False):
+        self.standby = standby
         self.full = full
 
     def prepare(self, batch, meta):
@@ -65,6 +67,8 @@ class DockerCases:
                 raise ValueError('Source manifest mismatch: ' + name)
         meta['adapter_manifest_sha256'] = file_hash(manifest)
         entry = 'run_ch3_far_search_pair400.sh' if self.full else 'run_ch3_initial_candidates_pair.sh'
+        if self.standby:
+            entry = 'run_ch3_standby_clearance_pair400.sh'
         paths = ['crk_auv_ch3_v1', 'tools/' + entry]
         if command(['git', '-C', str(PROJECT), 'status', '--porcelain', '--', *paths]):
             raise ValueError('Source differs from the reported Git revision')
@@ -139,7 +143,7 @@ class DockerCases:
     @staticmethod
     def wait_for_runner(batch, condition, done):
         started = time.monotonic()
-        wall_limit = 7500 if condition in FULL_CONDITIONS else 2100
+        wall_limit = 7500 if condition in FULL_CONDITIONS + STANDBY else 2100
         next_probe = started + 20
         while not done.is_file():
             now = time.monotonic()
@@ -198,19 +202,25 @@ def execute(batch, engine, meta, log, compare=pair):
             if entry.get('reference_valid') is False:
                 entry['status'] = 'invalid_initialization'
                 raise ValueError('对照无效，初始化入围、公共输入或评分与登记基准不符。')
-            if rc:
+            standby = condition in STANDBY
+            measured_contact = standby and rc == 1 and entry.get('termination_reason') == 'physical_contact'
+            if rc and not measured_contact:
                 raise RuntimeError(
                     f"{condition} exit {rc}: {entry.get('termination_reason')} {entry.get('error') or ''}"
                 )
             try:
-                case = load_case(directory, condition)
+                if standby:
+                    from .standby_records import load_standby
+                    case = load_standby(directory, condition, rc)
+                else:
+                    case = load_case(directory, condition)
             except (ValueError, KeyError, OSError) as error:
-                if condition in FULL_CONDITIONS:
+                if condition in FULL_CONDITIONS + STANDBY:
                     entry.update(status='invalid_evidence', verification_error=str(error))
                 raise
             if case['summary']['adapter_manifest_sha256'] != meta['adapter_manifest_sha256']:
                 raise ValueError('Host/container adapter manifest mismatch')
-            entry.update(status='valid', reference_valid=True)
+            entry.update(status='observed_contact' if measured_contact else 'valid', reference_valid=True)
             if 'mission' in case:
                 entry['mission'] = case['mission']
             loaded.append(case)
@@ -218,7 +228,7 @@ def execute(batch, engine, meta, log, compare=pair):
         result = compare(*loaded)
         if not result['valid']:
             raise ValueError('Initial-state or per-vehicle common-phase comparability insufficient')
-        meta.update(status='completed', reason='两组均通过工程与可比性核验。')
+        meta.update(status='completed', reason='两组端点、清理与共同前缀已核验。' if standby else '两组均通过工程与可比性核验。')
     except (Exception, KeyboardInterrupt) as error:
         cancel = batch / 'CANCEL'
         user_cancel = cancel.exists() and not cancel.read_text().startswith('fault:')
@@ -271,9 +281,12 @@ def export_zip(source, folder, digest):
     return destination
 
 
-def run_batch(batch, engine, export_dir=None, *, full=False):
+def run_batch(batch, engine, export_dir=None, *, full=False, standby=False):
     compare, report = pair, reports
-    if full:
+    if standby:
+        from .standby_compare import compare as compare_standby, report as report_standby
+        compare, report = compare_standby, report_standby
+    elif full:
         from .far_pair import compare_full, report_full
         compare, report = compare_full, report_full
     meta = dict(
@@ -283,7 +296,7 @@ def run_batch(batch, engine, export_dir=None, *, full=False):
         status='started',
         cases={},
         reason='',
-        conditions=list(FULL_CONDITIONS if full else CONDITIONS),
+        conditions=list(STANDBY if standby else FULL_CONDITIONS if full else CONDITIONS),
     )
 
     def log(msg):
@@ -337,12 +350,13 @@ def run_batch(batch, engine, export_dir=None, *, full=False):
     return 0 if status == 'completed' else (130 if meta['status'] == 'interrupted' else 1)
 
 
-def main(*, full=False):
+def main(*, full=False, standby=False):
     if len(sys.argv) != 1 or not sys.platform.startswith('linux') or Path('/.dockerenv').exists():
         raise SystemExit(
             'Run the pair launcher without arguments on the Ubuntu host'
         )
-    batch = reserve(ROOT / 'results/ch3', FULL_PREFIX) if full else reserve(ROOT / 'results/ch3')
+    prefix = STANDBY_PREFIX if standby else FULL_PREFIX if full else 'g6_initial_candidates_pair_'
+    batch = reserve(ROOT / 'results/ch3', prefix)
 
     def cancel(sig, _frame):
         if not (batch / 'CANCEL').exists():
@@ -351,7 +365,7 @@ def main(*, full=False):
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, cancel)
-    raise SystemExit(run_batch(batch, DockerCases(full), os.environ.get('CRK_EXPORT_DIR'), full=full))
+    raise SystemExit(run_batch(batch, DockerCases(full, standby), os.environ.get('CRK_EXPORT_DIR'), full=full, standby=standby))
 
 
 if __name__ == '__main__':

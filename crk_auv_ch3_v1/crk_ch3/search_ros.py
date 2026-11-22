@@ -23,6 +23,7 @@ from .initial_contract import CONDITIONS as INITIAL_CONDITIONS, BUDGET as INITIA
 from .initial_contract import FULL_CONDITIONS, HORIZON
 from .capture_evidence import capture_review, capture_sample
 from .scenario import Frame
+from .standby_geometry import CONDITIONS as STANDBY, hulls
 from .vehicle import load_profile
 
 
@@ -102,7 +103,7 @@ class SearchNode(MotionNode):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS + FULL_CONDITIONS)
+    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS + FULL_CONDITIONS + STANDBY)
     args = parser.parse_args()
     output = args.output.resolve()
     root = Path(os.environ.get('CRK_OUTPUT_ROOT', '/home/legion/AUV-simulation')).resolve()
@@ -111,7 +112,7 @@ def main():
     summary = json.loads((output/'summary.json').read_text(encoding='utf-8'))
     scene = json.loads((output/'scenario.json').read_text(encoding='utf-8'))
     initial = args.initial_condition
-    full_pair = initial in FULL_CONDITIONS
+    full_pair = initial in FULL_CONDITIONS + STANDBY
     if initial != summary.get('initial_candidate_condition'):
         raise ValueError('Initial candidate condition differs from supervisor assets')
     torch.set_num_threads(1)
@@ -129,6 +130,20 @@ def main():
     capture_mode = summary['mode'] == 'capture'
     try:
         node = SearchNode(lambda event: record('physical_contacts.jsonl', event))
+        if initial in STANDBY:
+            # Retain empty-message timestamps too, when the bridge actually supplies them.
+            contact_ticks = [set() for _ in range(4)]
+            native_contact = getattr(node, 'on_contact', None)
+            if native_contact is not None:
+                def observe_contact(agent, message):
+                    stamp = message.header.stamp
+                    ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+                    contact_ticks[agent].add(ns)
+                    node.contact_source_ns = ns
+                    native_contact(agent, message)
+                node.on_contact = observe_contact
+                native_record = node.contact_record
+                node.contact_record = lambda event: native_record(dict(event, source_ns=node.contact_source_ns))
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: setattr(node, 'stopping', True))
         states = node.ready()
@@ -144,7 +159,11 @@ def main():
             def diagnostic_motion(request):
                 record('motion_input.jsonl', runtime.request_evidence(request))
                 return plant(request)
-            runtime = InitialCandidateRuntime(scene, diagnostic_motion, initial)
+            if initial in STANDBY:
+                from .standby_runtime import StandbyRuntime
+                runtime = StandbyRuntime(scene, diagnostic_motion, initial, hulls(output/'world.sdf'))
+            else:
+                runtime = InitialCandidateRuntime(scene, diagnostic_motion, initial)
             (output/'admission.json').write_text(json.dumps(normalized(runtime.admission),
                 indent=2, allow_nan=False)+'\n', encoding='utf-8')
             if not runtime.admission['reference_check']['valid']:
@@ -171,7 +190,13 @@ def main():
         # The existing odometry contract admits at most one physics-substep lag.
         if any(abs(s.stamp_ns-epoch_ns) > 2_000_000 for s in states):
             raise PlantFailure('Startup odometry does not match the confirmed paused epoch')
+        def contact_publishers():
+            return [s.get_publisher_count() for s in node.contact_subs]
+        if initial in STANDBY:
+            summary['epoch_contact_publishers'] = contact_publishers()
         def record_control(row):
+            if initial in STANDBY:
+                row['contact_publishers'] = contact_publishers()
             if initial:
                 row['body_states'] = plant.states
             record('control.jsonl', row)
@@ -196,6 +221,9 @@ def main():
             completed += 1
             task = runtime.env.get_task_state()
             if initial:
+                if initial in STANDBY:
+                    decision = dict(step=runtime.step, reason='native_terminal') if runtime.terminal else runtime.boundary
+                    record('standby_checks.jsonl', dict(boundary=decision, terminal=runtime.terminal, clock_ns=node.clock_ns))
                 record('step_end.jsonl', dict(step=runtime.step, clock_ns=node.clock_ns,
                     installed=runtime.installed_state(), body_states=plant.states))
             if capture_mode or full_pair:
@@ -255,6 +283,8 @@ def main():
             until = time.monotonic()+.15
             while time.monotonic() < until:
                 rclpy.spin_once(node, timeout_sec=.01)
+            if initial in STANDBY:
+                summary['reason_before_contact_drain'] = reason
             if node.contact_failure:
                 reason = 'physical_contact'
             try:
@@ -263,6 +293,9 @@ def main():
                 summary['stop_zero_command_sent'] = True
             except Exception as error:
                 summary['stop_error'] = str(error)
+        if initial in STANDBY and node is not None:
+            from .standby_geometry import tick_ranges
+            summary['sensor_source_ranges_ns'] = [tick_ranges(ticks) for ticks in contact_ticks]
         if runtime is not None:
             native = runtime.env.unwrapped
             if last_map_step != completed:

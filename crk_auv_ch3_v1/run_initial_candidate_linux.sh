@@ -7,6 +7,7 @@ batch="$2"
 case "$condition" in
     initial_original32|initial_quadrant32) prefix=g6_initial_candidates_pair_; wall=34m ;;
     initial_original400|initial_quadrant400) prefix=g6_far_search_pair400_; wall=124m ;;
+    quadrant_standby_original400|quadrant_standby_clearance400) prefix=g6_standby_clearance_pair400_; wall=124m ;;
     *) exit 2 ;;
 esac
 root=/home/legion/AUV-simulation

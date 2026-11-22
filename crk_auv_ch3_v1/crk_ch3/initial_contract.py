@@ -1,6 +1,7 @@
 """Pre-registered checking criteria for the original far-search fixture. Never used to select candidates."""
 
 import math
+from .standby_geometry import CONDITIONS as STANDBY
 from .contracts import canonical_hash
 
 SCHEMA = 'crk.g6.initial_candidate_pair.v1'
@@ -13,6 +14,8 @@ HORIZON = 400
 
 
 def admission_rule(condition):
+    if condition in STANDBY:
+        return CONDITIONS[1]
     if condition in FULL_CONDITIONS:
         return CONDITIONS[FULL_CONDITIONS.index(condition)]
     if condition in CONDITIONS:

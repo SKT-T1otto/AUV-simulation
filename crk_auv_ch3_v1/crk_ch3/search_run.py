@@ -17,6 +17,7 @@ from .motion_world import WORLD
 from .search_world import fixture, build_search_world, search_bridge_yaml
 from .scenario import select_scene
 from .native_source import activate_native
+from .standby_geometry import CONDITIONS as STANDBY, PREFIX as STANDBY_PREFIX, SCHEMA as STANDBY_SCHEMA
 from .vehicle import ROOT, load_profile
 from .reassignment_contract import CONDITIONS, SCHEMA, BUDGET, BOUNDARY, PREFIX_CRITERIA
 from .progress_commit import CONDITIONS as PROGRESS_CONDITIONS, FIXTURE_CONDITIONS, SCHEMA as PROGRESS_SCHEMA, prefix_criteria
@@ -27,12 +28,14 @@ from .initial_contract import FULL_CONDITIONS, FULL_PREFIX, FULL_SCHEMA, HORIZON
 def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition=None, progress_condition=None,
                   initial_condition=None, pair_directory=None):
     if initial_condition or pair_directory is not None:
-        if (initial_condition not in INITIAL_CONDITIONS + FULL_CONDITIONS or mode != 'search' or scene is not None
+        if (initial_condition not in INITIAL_CONDITIONS + FULL_CONDITIONS + STANDBY or mode != 'search' or scene is not None
                 or diagnostic_condition or progress_condition or pair_directory is None):
             raise ValueError('Initial pair requires the original search fixture and an explicit batch directory')
         parent = (output_root/'results/ch3').resolve()
         pair_directory = Path(pair_directory)
         batch_prefix = FULL_PREFIX if initial_condition in FULL_CONDITIONS else 'g6_initial_candidates_pair_'
+        if initial_condition in STANDBY:
+            batch_prefix = STANDBY_PREFIX
         if (pair_directory.is_symlink() or pair_directory.resolve().parent != parent
                 or not pair_directory.name.startswith(batch_prefix) or not pair_directory.is_dir()):
             raise ValueError('Invalid initial pair directory')
@@ -81,7 +84,9 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
         summary.update(initial_candidate_condition=initial_condition, batch_id=pair_directory.name,
             native_max_steps=HORIZON, prefix_criteria=CRITERIA,
             adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
-        if initial_condition in FULL_CONDITIONS:
+        if initial_condition in STANDBY:
+            summary.update(pair_schema=STANDBY_SCHEMA, run_kind='standby_clearance_pair400_gazebo')
+        elif initial_condition in FULL_CONDITIONS:
             summary.update(pair_schema=FULL_SCHEMA, run_kind='far_search_pair400_gazebo')
         else:
             summary.update(diagnostic_schema=INITIAL_SCHEMA, diagnostic_budget=32, diagnostic_valid=False,
@@ -117,7 +122,7 @@ def main():
     parser.add_argument('--scenario-id')
     parser.add_argument('--diagnostic-condition', choices=CONDITIONS)
     parser.add_argument('--progress-condition', choices=PROGRESS_CONDITIONS)
-    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS + FULL_CONDITIONS)
+    parser.add_argument('--initial-condition', choices=INITIAL_CONDITIONS + FULL_CONDITIONS + STANDBY)
     parser.add_argument('--pair-directory', type=Path)
     args = parser.parse_args()
     if args.scenario_id and not args.manifest:
@@ -197,7 +202,7 @@ def main():
                 print(line, end='', flush=True)
         reader = threading.Thread(target=forward, daemon=True)
         reader.start()
-        wall_seconds = 7200 if args.initial_condition in FULL_CONDITIONS else 1800
+        wall_seconds = 7200 if args.initial_condition in FULL_CONDITIONS + STANDBY else 1800
         deadline = time.monotonic()+wall_seconds
         while controller.poll() is None:
             if args.initial_condition and (output.parent/'CANCEL').exists():
