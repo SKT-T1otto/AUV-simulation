@@ -4,7 +4,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import numpy as np
 from crk_ch3.motion_protocol import BodyState, TeamStateBuffer
 
@@ -89,6 +89,25 @@ class RosContractTests(unittest.TestCase):
         node.publishers_[0][0].wait_for_all_acked = lambda _: False
         with self.assertRaises(TimeoutError):
             node.publish(values)
+
+    def test_recording_retries_only_the_initial_pause(self):
+        node = self.node()
+        node.client = Mock()
+        node.retry_startup_pause_timeout = True
+        node.publishers_ = []
+        node.publish = Mock()
+        node.get_logger = Mock()
+        node.control_world = Mock(side_effect=[TimeoutError('startup'), None])
+        node.step = Mock(return_value=('ready',0))
+        self.assertEqual(node.start(),'ready')
+        self.assertEqual(len(node.control_world.call_args_list),2)
+        self.assertTrue(all(not call.args for call in node.control_world.call_args_list))
+        node.step.assert_called_once_with(20)
+        node.control_world = Mock(side_effect=TimeoutError('step timeout'))
+        node.clock_ns = 0
+        with self.assertRaises(TimeoutError):
+            self.module.MotionNode.step(node,10)
+        node.control_world.assert_called_once_with(10)
 
     def test_step_does_not_complete_one_physics_substep_early(self):
         node = self.node()

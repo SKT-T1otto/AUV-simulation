@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Run from a terminal on the Ubuntu graphics desktop, as the desktop user.
 set -eo pipefail
+case "$#:${1:-}" in
+  0:|1:--record) ;;
+  *) echo 'Usage: bash tools/run_ch3_inspection_demo.sh [--record]' >&2; exit 2 ;;
+esac
 project="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 root="$(cd -- "${CRK_OUTPUT_ROOT:-/home/legion/AUV-simulation}" && pwd -P)"
 container="${CRK_CONTAINER:-crk-ros2-home}"
@@ -36,5 +40,7 @@ exec sudo docker exec "${io[@]}" -u 0 -e "DISPLAY=$DISPLAY" -e "XAUTHORITY=$root
     sha256sum --quiet -c SHA256SUMS
     source /opt/ros/jazzy/setup.bash
     export PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONIOENCODING=utf-8
-    exec /opt/crk-g5-cpu-v1/bin/python -B -u -m crk_ch3.search_run --mode demo
-  '
+    options=()
+    if [ "$1" = "--record" ]; then options+=(--record-video); fi
+    exec /opt/crk-g5-cpu-v1/bin/python -B -u -m crk_ch3.search_run --mode demo "${options[@]}"
+  ' bash "${1:-}"

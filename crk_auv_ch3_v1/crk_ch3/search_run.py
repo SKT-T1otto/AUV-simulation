@@ -26,7 +26,9 @@ from .initial_contract import FULL_CONDITIONS, FULL_PREFIX, FULL_SCHEMA, HORIZON
 
 
 def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition=None, progress_condition=None,
-                  initial_condition=None, pair_directory=None):
+                  initial_condition=None, pair_directory=None, record_video=False):
+    if record_video and mode != 'demo':
+        raise ValueError('Camera recording requires the inspection demo')
     if initial_condition or pair_directory is not None:
         if (initial_condition not in INITIAL_CONDITIONS + FULL_CONDITIONS + STANDBY or mode != 'search' or scene is not None
                 or diagnostic_condition or progress_condition or pair_directory is None):
@@ -53,6 +55,9 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
     if mode == 'demo':
         from .inspection_demo import presentation_world
         xml = presentation_world(xml)
+        if record_video:
+            from .inspection_video import camera_world
+            xml = camera_world(xml)
     parent = output_root/'results/ch3'
     parent.mkdir(parents=True, exist_ok=True)
     prefix = 'search_'+mode if diagnostic_condition is None else 'd2_'+diagnostic_condition
@@ -88,6 +93,8 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
                        motion_reference='fixed survey transects; public stationary site at handoff',
                        git_sha=os.environ.get('CRK_SOURCE_SHA'),
                        adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
+        if record_video:
+            summary.update(video_requested=True, video_verified=False)
     if initial_condition:
         summary.update(initial_candidate_condition=initial_condition, batch_id=pair_directory.name,
             native_max_steps=HORIZON, prefix_criteria=CRITERIA,
@@ -124,6 +131,7 @@ def update_summary(output, **changes):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--headless', action='store_true')
+    parser.add_argument('--record-video', action='store_true', help='Record the demo with a Gazebo camera')
     parser.add_argument('--generate-only', action='store_true', help='Only generate assets; no motion validation')
     parser.add_argument('--mode', choices=('smoke', 'capture', 'search', 'demo'), default='smoke')
     parser.add_argument('--manifest', type=Path)
@@ -147,7 +155,7 @@ def main():
     scene = None if args.manifest is None else select_scene(json.loads(args.manifest.read_text(encoding='utf-8')), args.scenario_id)
     output = create_assets(output_root, args.mode, scene, diagnostic_condition=args.diagnostic_condition,
                            progress_condition=args.progress_condition, initial_condition=args.initial_condition,
-                           pair_directory=args.pair_directory)
+                           pair_directory=args.pair_directory, record_video=args.record_video)
     print(f'G6 results: {output}', flush=True)
     if args.generate_only:
         update_summary(output, run_kind='g6_assets_only')
@@ -176,20 +184,20 @@ def main():
             raise RuntimeError('SDF validation failed; see sdf_validation.log')
         bridge = str(Path(get_package_prefix('ros_gz_bridge'))/'lib/ros_gz_bridge/parameter_bridge')
         partition = output.parent.name+'_'+output.name if args.initial_condition else output.name
-        env = {**os.environ, 'GZ_PARTITION': 'crk_g6_'+partition, 'ROS_DOMAIN_ID': '76',
+        env = {**os.environ, 'GZ_PARTITION': 'crk_g6_'+partition, 'ROS_DOMAIN_ID': '77' if args.record_video else '76',
                'ROS_LOCALHOST_ONLY': '1', 'ROS_LOG_DIR': str(output/'ros_logs'),
                'CRK_G6_REALTIME_VIEW': '0' if args.headless else '1'}
-        def launch(command, filename):
+        def launch(command, filename, cwd=ROOT):
             stream = (output/filename).open('w', encoding='utf-8')
             streams.append(stream)
             process = subprocess.Popen(command, env=env, stdout=stream, stderr=subprocess.STDOUT,
-                                       start_new_session=True, cwd=ROOT)
+                                       start_new_session=True, cwd=cwd)
             processes.append(process)
             process_logs.append((process, filename))
             return process
         gui = ['--gui-config',str(ROOT/'config/inspection_demo_gui.config')] if args.mode=='demo' else []
         gz_args = ['gz', 'sim', '-v', '3']+(['-s'] if args.headless else gui)+[str(output/'world.sdf')]
-        launch(gz_args, 'gazebo.log')  # Deliberately starts paused; controller owns stepping.
+        launch(gz_args, 'gazebo.log', cwd=output if args.record_video else ROOT)
         launch([bridge, '--ros-args', '-p', f'config_file:={output/"bridge.yaml"}'], 'bridge.log')
         launch([bridge, f'/world/{WORLD}/control@ros_gz_interfaces/srv/ControlWorld'], 'world_control_bridge.log')
         launch([bridge, f'/world/{WORLD}/set_pose@ros_gz_interfaces/srv/SetEntityPose'], 'target_marker_bridge.log')
@@ -228,7 +236,7 @@ def main():
         metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
         if result == 0 and not metadata.get('engineering_acceptance_passed'):
             raise RuntimeError('Controller exited without a valid acceptance summary')
-        if args.mode=='demo' and result==0 and not args.headless:
+        if args.mode=='demo' and result==0 and not args.headless and not args.record_video:
             print('演示完成，保留最终视角 8 秒。',flush=True)
             time.sleep(8)
         if result != 0 and metadata.get('termination_reason') == 'not_started':
@@ -312,6 +320,20 @@ def main():
             lines = (output/failed['log']).read_text(encoding='utf-8', errors='replace').splitlines()
             print(f"Last 35 lines of {output/failed['log']}:", file=sys.stderr)
             print('\n'.join(lines[-35:]), file=sys.stderr, flush=True)
+        if args.record_video:
+            from .inspection_video import verify_recording
+            metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
+            try:
+                if not metadata.get('video_start_ack') or not metadata.get('video_stop_ack'):
+                    raise ValueError(metadata.get('video_error', metadata.get('error', 'Camera handshake incomplete')))
+                if result or not metadata.get('demo_verified'):
+                    raise ValueError('Task did not complete; existing recording retained as partial')
+                track = verify_recording(output, metadata['actual_simulated_duration_s'])
+                update_summary(output, video_verified=True, video_track=track)
+            except Exception as error:
+                result = result or 1
+                update_summary(output, video_verified=False, video_error=str(error))
+                print(f'VIDEO_ERROR={error}', file=sys.stderr, flush=True)
         if os.geteuid() == 0 and os.environ.get('CRK_OUTPUT_UID', '').isdigit() and os.environ.get('CRK_OUTPUT_GID', '').isdigit():
             uid, gid = int(os.environ['CRK_OUTPUT_UID']), int(os.environ['CRK_OUTPUT_GID'])
             for directory, folders, files in os.walk(output, followlinks=False):
@@ -325,7 +347,13 @@ def main():
             digest = archive(output, scratch)
             scratch.rename(target)
             target.chmod(0o644)
-            print(f'DEMO_VERIFIED={result == 0}\nUPLOAD_FILE={target}\nZIP_SHA256={digest}', flush=True)
+            metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
+            print(f"DEMO_VERIFIED={metadata.get('demo_verified', False)}", flush=True)
+            if args.record_video:
+                print(f"VIDEO_VERIFIED={metadata['video_verified']}", flush=True)
+                if metadata['video_verified']:
+                    print(f"VIDEO_FILE={output / 'inspection.mp4'}", flush=True)
+            print(f'UPLOAD_FILE={target}\nZIP_SHA256={digest}', flush=True)
         print(f'Inspect {output}/summary.json', flush=True)
     raise SystemExit(result)
 

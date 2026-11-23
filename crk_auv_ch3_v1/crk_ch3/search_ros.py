@@ -136,6 +136,8 @@ def main():
         summary['demo_search_displacements_m'] = [0.] * 3
     try:
         node = SearchNode(lambda event: record('physical_contacts.jsonl', event))
+        if summary.get('video_requested'):
+            node.retry_startup_pause_timeout = True
         if initial in STANDBY:
             # Retain empty-message timestamps too, when the bridge actually supplies them.
             contact_ticks = [set() for _ in range(4)]
@@ -155,6 +157,11 @@ def main():
         states = node.ready()
         warmup_clock_ns = node.clock_ns
         summary['warmup_clock_ns'] = warmup_clock_ns
+        if summary.get('video_requested'):
+            from .inspection_video import request
+            request(output, start=True)
+            summary['video_start_ack'] = True
+            print('Gazebo 相机已接受录制请求。', flush=True)
         expected = np.array([Frame().position(p) for p in scene['initial_agent_positions']])
         if np.max(np.linalg.norm(np.array([s.position for s in states])-expected, axis=1)) > .02:
             raise PlantFailure('Spawn/warmup state differs from scene by more than 0.02 m')
@@ -319,6 +326,13 @@ def main():
                 summary['stop_zero_command_sent'] = True
             except Exception as error:
                 summary['stop_error'] = str(error)
+        if summary.get('video_start_ack'):
+            from .inspection_video import stop_recording
+            try:
+                summary['video_finalization'] = stop_recording(output)
+                summary['video_stop_ack'] = True
+            except Exception as error:
+                summary['video_error'] = str(error)
         if initial in STANDBY and node is not None:
             from .standby_geometry import tick_ranges
             summary['sensor_source_ranges_ns'] = [tick_ranges(ticks) for ticks in contact_ticks]

@@ -1,5 +1,11 @@
 # Gazebo 四艇水下观测站巡检演示
 
+## 用一条命令录制 MP4
+
+在 Ubuntu 图形桌面、仓库根目录运行 `bash tools/run_ch3_inspection_demo.sh --record`。程序在 Gazebo 世界中添加固定观察相机，并通过本批次的 Gazebo Transport 服务自动开始和停止录制。四艇继续由 ROS 2 控制。录像使用相机视角和仿真时间，1280 × 720，25 帧/秒；拖动 GUI 视角不会移动这台相机。运行期间无需操作 GUI。录制模式在 ROS 域 77 运行。第一次零步暂停请求可在 45 秒预算内重试，运动步进请求仍只发送一次。
+
+请等待终端打印 `VIDEO_VERIFIED=True` 和 `VIDEO_FILE`。每次成功运行在独立的结果目录保存 `inspection.mp4`，并将它放入 `UPLOAD_FILE` 指向的 ZIP。程序分别检查任务成功和录像完整性，读取视频轨、分辨率、帧数及持续时间；容器有 ffmpeg 时再做全片解码。中断或相机故障会保存已有证据，并返回非零退出码。录制使用 Gazebo Harmonic 自带的 Sensors 和 CameraVideoRecorder 服务端插件。
+
 在 Ubuntu 图形桌面打开终端。源码已更新时，从仓库根目录运行 `bash tools/run_ch3_inspection_demo.sh`。脚本使用已有的 crk-ros2-home、Gazebo Harmonic、ROS 2 Jazzy 和 CPU 任务环境。图形窗口打开后保持暂停按钮原状，程序按物理时钟自动推进。可以拖动视角、滚轮缩放，并把终端与 Gazebo 并排放置。
 
 ## 现场画面

@@ -27,6 +27,7 @@ PHYSICS_NS = 2_000_000
 
 class MotionNode(Node):
     vehicle_count = 4
+    retry_startup_pause_timeout = False
 
     def __init__(self):
         super().__init__('crk_g4_four_vehicle_motion')
@@ -74,12 +75,16 @@ class MotionNode(Node):
                 raise TimeoutError(f'{description}; clock_ns={self.clock_ns}; latest_odom_ns={stamps}')
             rclpy.spin_once(self, timeout_sec=.01)
 
-    def control_world(self, steps=0):
+    def control_world(self, steps=0, *, timeout=10.):
         request = ControlWorld.Request()
         request.world_control.pause = True
         request.world_control.multi_step = int(steps)
         future = self.client.call_async(request)
-        self.wait(future.done, 10., 'World control service timeout')
+        try:
+            self.wait(future.done, timeout, 'World control service timeout')
+        except TimeoutError:
+            self.client.remove_pending_request(future)
+            raise
         result = future.result()
         if result is None or not result.success:
             raise RuntimeError('Gazebo rejected world control request')
@@ -121,8 +126,12 @@ class MotionNode(Node):
         until = time.monotonic()+45
         while True:
             try:
-                self.control_world()
+                self.control_world(timeout=min(10., max(0., until-time.monotonic())))
                 break
+            except TimeoutError:
+                if not self.retry_startup_pause_timeout or time.monotonic() >= until:
+                    raise
+                self.get_logger().warning('Retrying the initial pause (zero physics steps)')
             except RuntimeError:
                 if time.monotonic() > until:
                     raise
