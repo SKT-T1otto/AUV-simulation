@@ -12,10 +12,11 @@ import rclpy
 from rclpy.signals import SignalHandlerOptions
 
 from .envelope_ros import state_data
+from . import heave
 from .search_ros import SearchNode
 from .search_transport import SearchTransport
 from .surge import DT, LEVELS, PHASES, SurgeDrive, write_json
-from .vehicle import load_profile
+from .vehicle import load_profile, roll_pitch
 
 
 class SingleHullNode(SearchNode):
@@ -24,11 +25,22 @@ class SingleHullNode(SearchNode):
 
 def collect(node, output, summary, stream):
     plan = json.loads((output/'program.json').read_text())
-    level = plan['level_N']
     profile = load_profile()
-    if (level not in LEVELS or level != summary['level_N'] or
-            profile != json.loads((output/'vehicle_profile.json').read_text())):
-        raise ValueError('Input level or physical profile differs from recorded assets')
+    if profile != json.loads((output/'vehicle_profile.json').read_text()):
+        raise ValueError('Physical profile differs from recorded assets')
+    vertical = summary.get('run_kind') == heave.KIND
+    if vertical:
+        schedule = heave.phases(summary['case'], profile)
+        if (plan['case'] != summary['case'] or plan['dt_s'] != DT or plan['phases'] !=
+                [dict(name=p, ticks=n, requested_body_z_N=f) for p,n,f in schedule]):
+            raise ValueError('Unexpected heave program')
+        force_field = 'requested_heave_N'
+    else:
+        level = plan['level_N']
+        if level not in LEVELS or level != summary['level_N']:
+            raise ValueError('Unexpected surge level')
+        schedule = [(p, n, level if p == 'drive' else 0.) for p,n in PHASES]
+        force_field = 'requested_surge_N'
     states = node.ready()
     epoch = node.confirm_pause()
     start = np.array(plan['initial_world_position'])
@@ -37,15 +49,20 @@ def collect(node, output, summary, stream):
     control = SurgeDrive(profile)
     guard = SearchTransport(node, states, profile, record=lambda _: None)
     summary.update(task_epoch_ns=epoch, initial_state=state_data(states))
-    for phase, count in PHASES:
+    if vertical and (np.linalg.norm(states[0].velocity_body) > .02 or
+                     np.max(np.abs(np.rad2deg(roll_pitch(states[0].quaternion)))) > 1.):
+        raise RuntimeError('Heave initial state exceeds near-rest or level tolerance')
+    for phase, count, target in schedule:
         if phase == 'drive' and np.linalg.norm(states[0].velocity_body) > .02:
             raise RuntimeError('Vehicle not at rest before excitation (>0.02 m/s)')
         for k in range(count):
             node.check()
             guard.validate(states)
             before = state_data(states)
-            target = level if phase == 'drive' else 0.
-            force, diagnostic = control.command(target, states[0], start[2])
+            if vertical:
+                force, diagnostic = control.apply_force([0., 0., target], states[0])
+            else:
+                force, diagnostic = control.command(target, states[0], start[2])
             node.publish([force])
             states, requested_ns = node.step(10)
             tick = summary['completed_control_steps']+1
@@ -54,7 +71,8 @@ def collect(node, output, summary, stream):
                 raise RuntimeError('Control clock / odometry timestamp mismatch')
             row = dict(tick=tick, phase=phase, local_tick=k+1, requested_clock_ns=requested_ns,
                        clock_ns=node.clock_ns, before=before, after=state_data(states),
-                       requested_surge_N=target, forces_N=[force.tolist()], diagnostics=[diagnostic])
+                       forces_N=[force.tolist()], diagnostics=[diagnostic])
+            row[force_field] = target
             stream.write(json.dumps(row, allow_nan=False)+'\n')
             stream.flush()
             summary['completed_control_steps'] = tick
@@ -105,9 +123,11 @@ def main():
                     summary['termination_reason'] = 'physical_contact'
                 node.destroy_node()
             rclpy.shutdown()
+            expected_steps = (sum(n for _, n, _ in heave.phases(summary['case'], load_profile()))
+                              if summary.get('run_kind') == heave.KIND else sum(n for _, n in PHASES))
             summary['engineering_acceptance_passed'] = bool(
                 summary['termination_reason']=='completed' and summary['linux_sdf_valid']
-                and summary['stop_confirmed'] and summary['completed_control_steps']==sum(n for _,n in PHASES)
+                and summary['stop_confirmed'] and summary['completed_control_steps']==expected_steps
                 and summary.get('contact_events_observed') == 0)
             write_json(output/'summary.json', summary)
     raise SystemExit(0 if summary['engineering_acceptance_passed'] else 1)
