@@ -128,6 +128,12 @@ def main():
     search_displacement_before_found = 0.
     capture_rows = []
     capture_mode = summary['mode'] == 'capture'
+    demo = summary['mode'] == 'demo'
+    if demo:
+        from .inspection_demo import inspection_sample, phase, outcome, SurveyTransects
+        last_phase = None
+        survey = SurveyTransects(scene['initial_agent_positions'])
+        summary['demo_search_displacements_m'] = [0.] * 3
     try:
         node = SearchNode(lambda event: record('physical_contacts.jsonl', event))
         if initial in STANDBY:
@@ -169,6 +175,12 @@ def main():
             if not runtime.admission['reference_check']['valid']:
                 summary['comparison_invalid_reason'] = 'initial_reference_mismatch'
                 raise PlantFailure('Initial candidates, scores or public inputs disagree with the registered reference')
+        elif demo:
+            def demo_motion(request):
+                applied, evidence = survey.apply(request, runtime.env)
+                record('demo_motion.jsonl', evidence)
+                return plant(applied)
+            runtime = ExternalMissionRuntime(scene, demo_motion)
         else:
             runtime = ExternalMissionRuntime(scene, lambda request: plant(request))
         native = runtime.env.unwrapped
@@ -214,7 +226,7 @@ def main():
             if initial:
                 record('step_start.jsonl', dict(step=runtime.step+1, clock_ns=node.clock_ns,
                     installed=runtime.installed_state(), body_states=plant.states))
-            if capture_mode or full_pair:
+            if capture_mode or full_pair or demo:
                 executor_start = Frame().inverse_position(plant.states[native.executor_idx].position)
                 target_start = native.target_state.position.tolist()
             result = runtime.advance()
@@ -226,14 +238,28 @@ def main():
                     record('standby_checks.jsonl', dict(boundary=decision, terminal=runtime.terminal, clock_ns=node.clock_ns))
                 record('step_end.jsonl', dict(step=runtime.step, clock_ns=node.clock_ns,
                     installed=runtime.installed_state(), body_states=plant.states))
-            if capture_mode or full_pair:
+            if capture_mode or full_pair or demo:
                 motion = result['motion']
-                sample = capture_sample(runtime.step, task, native, executor_start,
+                sample_fn = inspection_sample if demo else capture_sample
+                sample = sample_fn(runtime.step, task, native, executor_start,
                     motion['measured_positions_native'][native.executor_idx], target_start,
                     motion['feedback_stamp_ns'])
                 record('capture_trace.jsonl', sample)
                 capture_rows.append(sample)
+                if demo:
+                    current = phase(sample)
+                    if current != last_phase or runtime.step % 10 == 0:
+                        status = f"[{runtime.step*.2:5.1f} s] {current}"
+                        if sample['executor_received']:
+                            status += (f"  |  执行艇距站 {sample['distance_end_m']:.2f} m"
+                                       f"  |  驻留 {sample['native_hold']}/{sample['required_steps']}")
+                        print(status, flush=True)
+                    last_phase = current
             if not task.target_found or runtime.found_step == runtime.step:
+                if demo:
+                    summary['demo_search_displacements_m'] = np.linalg.norm(
+                        np.array([s.position for s in plant.states[:3]]) - plant.initial_positions[:3],
+                        axis=1).tolist()
                 search_displacement_before_found = max(search_displacement_before_found,
                     float(np.max(np.linalg.norm(np.array([s.position for s in plant.states[:3]])
                         -plant.initial_positions[:3], axis=1))))
@@ -325,9 +351,12 @@ def main():
             contact_absence_proven=False,
             contact_monitor_status='ROS subscriptions plus event-only hull sensors; asynchronous coverage',
             physical_stop='zero command with bridge receipt and world pause; no settling rollout')
-        if capture_mode or (full_pair and summary.get('task_success')):
+        if capture_mode or demo or (full_pair and summary.get('task_success')):
             summary['capture_evidence'] = capture_review(capture_rows, summary)
         summary.update(acceptance(summary))
+        if demo:
+            summary['demo_evidence'] = outcome(capture_rows,summary)
+            summary['demo_verified'] = summary['demo_evidence']['verified']
         if initial in INITIAL_CONDITIONS:
             completed_budget = reason == 'diagnostic_budget_completed' and completed == INITIAL_BUDGET
             # Apply the usual engineering predicates to a completed diagnostic budget.
@@ -347,6 +376,8 @@ def main():
         print(f"Capture acceptance={summary['g6_capture_acceptance_passed']}; "
               f"evidence={summary['capture_evidence']}", flush=True)
     passed = summary['g6_capture_acceptance_passed'] if capture_mode else summary['engineering_acceptance_passed']
+    if demo:
+        passed = summary['demo_verified']
     raise SystemExit(0 if passed else 1)
 
 

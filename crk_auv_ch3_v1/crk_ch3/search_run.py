@@ -50,6 +50,9 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
         raise ValueError('Native scene requires explicit planner_seed')
     profile = load_profile()
     xml, truth = build_search_world(scene, profile)
+    if mode == 'demo':
+        from .inspection_demo import presentation_world
+        xml = presentation_world(xml)
     parent = output_root/'results/ch3'
     parent.mkdir(parents=True, exist_ok=True)
     prefix = 'search_'+mode if diagnostic_condition is None else 'd2_'+diagnostic_condition
@@ -80,6 +83,11 @@ def create_assets(output_root, mode='smoke', scene=None, *, diagnostic_condition
             adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
     if mode == 'capture':
         summary['adapter_manifest_sha256'] = hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest()
+    if mode == 'demo':
+        summary.update(run_kind='fixed_inspection_buoy_demo_v1', demo_verified=False,
+                       motion_reference='fixed survey transects; public stationary site at handoff',
+                       git_sha=os.environ.get('CRK_SOURCE_SHA'),
+                       adapter_manifest_sha256=hashlib.sha256((ROOT/'SHA256SUMS').read_bytes()).hexdigest())
     if initial_condition:
         summary.update(initial_candidate_condition=initial_condition, batch_id=pair_directory.name,
             native_max_steps=HORIZON, prefix_criteria=CRITERIA,
@@ -117,7 +125,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--generate-only', action='store_true', help='Only generate assets; no motion validation')
-    parser.add_argument('--mode', choices=('smoke', 'capture', 'search'), default='smoke')
+    parser.add_argument('--mode', choices=('smoke', 'capture', 'search', 'demo'), default='smoke')
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--scenario-id')
     parser.add_argument('--diagnostic-condition', choices=CONDITIONS)
@@ -179,7 +187,8 @@ def main():
             processes.append(process)
             process_logs.append((process, filename))
             return process
-        gz_args = ['gz', 'sim', '-v', '3']+(['-s'] if args.headless else [])+[str(output/'world.sdf')]
+        gui = ['--gui-config',str(ROOT/'config/inspection_demo_gui.config')] if args.mode=='demo' else []
+        gz_args = ['gz', 'sim', '-v', '3']+(['-s'] if args.headless else gui)+[str(output/'world.sdf')]
         launch(gz_args, 'gazebo.log')  # Deliberately starts paused; controller owns stepping.
         launch([bridge, '--ros-args', '-p', f'config_file:={output/"bridge.yaml"}'], 'bridge.log')
         launch([bridge, f'/world/{WORLD}/control@ros_gz_interfaces/srv/ControlWorld'], 'world_control_bridge.log')
@@ -219,6 +228,9 @@ def main():
         metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
         if result == 0 and not metadata.get('engineering_acceptance_passed'):
             raise RuntimeError('Controller exited without a valid acceptance summary')
+        if args.mode=='demo' and result==0 and not args.headless:
+            print('演示完成，保留最终视角 8 秒。',flush=True)
+            time.sleep(8)
         if result != 0 and metadata.get('termination_reason') == 'not_started':
             raise RuntimeError('Controller exited before reporting; see controller.log')
     except KeyboardInterrupt:
@@ -247,7 +259,7 @@ def main():
                     process.wait()
         if reader is not None:
             reader.join(timeout=3)
-        if args.initial_condition:
+        if args.initial_condition or args.mode == 'demo':
             # A group leader can exit while its simulator child is winding down.
             # Check only the session groups created in this run, under the motion lock.
             def live(group):
@@ -287,6 +299,8 @@ def main():
         if lock_stream is not None:
             lock_stream.close()
         if failure_changes is not None:
+            if args.mode == 'demo':
+                failure_changes.update(demo_verified=False)
             if args.diagnostic_condition or args.progress_condition or args.initial_condition:
                 metadata = json.loads((output/'summary.json').read_text(encoding='utf-8'))
                 failure_changes.update(diagnostic_valid=False,
@@ -304,6 +318,14 @@ def main():
                 os.chown(directory, uid, gid, follow_symlinks=False)
                 for name in files:
                     os.chown(Path(directory)/name, uid, gid, follow_symlinks=False)
+        if args.mode == 'demo':
+            from .initial_package import archive
+            target = output.with_suffix('.zip')
+            scratch = target.with_suffix('.zip.partial')
+            digest = archive(output, scratch)
+            scratch.rename(target)
+            target.chmod(0o644)
+            print(f'DEMO_VERIFIED={result == 0}\nUPLOAD_FILE={target}\nZIP_SHA256={digest}', flush=True)
         print(f'Inspect {output}/summary.json', flush=True)
     raise SystemExit(result)
 

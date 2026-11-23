@@ -9,7 +9,7 @@ from .scenario import Frame, validate_scene
 
 
 def fixture(mode):
-    if mode not in ('smoke', 'capture', 'search'):
+    if mode not in ('smoke', 'capture', 'search', 'demo'):
         raise ValueError('Unknown G6 mode')
     scene = json.loads((ROOT/'tests/fixtures/scene.json').read_text(encoding='utf-8'))
     scene = copy.deepcopy(scene)
@@ -19,6 +19,13 @@ def fixture(mode):
         scene['initial_agent_positions'][3] = [4.8, 2, 2]
         scene.update(initial_executor_wait_point=[4.8, 2, 2], target_position=[4.1, 2, 2],
                      target_initial_position=[4.1, 2, 2], target_initial_velocity=[.1, 0, 0])
+    if mode == 'demo':
+        station = [5.6, 6., 3.]
+        scene['initial_agent_positions'][3] = [5.6, 9., 3.]
+        scene['initial_executor_wait_point'] = scene['initial_agent_positions'][3].copy()
+        scene.update(scenario_id='g6_fixed_inspection_buoy_demo_v1',
+                     purpose='engineering_presentation_fixture', target_position=station,
+                     target_initial_position=station.copy(), target_initial_velocity=[0.,0.,0.])
     return validate_scene(scene)
 
 
