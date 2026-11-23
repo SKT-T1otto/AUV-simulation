@@ -80,6 +80,12 @@ def main():
     if args.generate_only:
         update_summary(output, run_kind='envelope_assets_only' if args.envelope_case else 'g4_assets_only')
         return
+    module = 'crk_ch3.envelope_ros' if args.envelope_case else 'crk_ch3.motion_ros'
+    raise SystemExit(supervise(output_root, output, args.headless, module, bool(args.envelope_case)))
+
+
+def supervise(output_root, output, headless, controller_module, marker_service):
+    """Run one isolated, paused Gazebo instance and reap its subprocesses."""
     processes, streams, reader = [], [], None
     process_logs = []
     failed_processes = []
@@ -103,7 +109,7 @@ def main():
         bridge = str(Path(get_package_prefix('ros_gz_bridge'))/'lib/ros_gz_bridge/parameter_bridge')
         env = {**os.environ, 'GZ_PARTITION': 'crk_g4_'+output.name, 'ROS_DOMAIN_ID': '75',
                'ROS_LOCALHOST_ONLY': '1', 'ROS_LOG_DIR': str(output/'ros_logs'),
-               'CRK_G4_REALTIME_VIEW': '0' if args.headless else '1'}
+               'CRK_G4_REALTIME_VIEW': '0' if headless else '1'}
         def launch(command, filename):
             stream = (output/filename).open('w', encoding='utf-8')
             streams.append(stream)
@@ -112,15 +118,14 @@ def main():
             processes.append(process)
             process_logs.append((process, filename))
             return process
-        gz_args = ['gz', 'sim', '-v', '3']+(['-s'] if args.headless else [])+[str(output/'world.sdf')]
+        gz_args = ['gz', 'sim', '-v', '3']+(['-s'] if headless else [])+[str(output/'world.sdf')]
         launch(gz_args, 'gazebo.log')  # Deliberately starts paused; controller owns stepping.
         launch([bridge, '--ros-args', '-p', f'config_file:={output/"bridge.yaml"}'], 'bridge.log')
         launch([bridge, f'/world/{WORLD}/control@ros_gz_interfaces/srv/ControlWorld'], 'world_control_bridge.log')
-        if args.envelope_case:
+        if marker_service:
             launch([bridge, f'/world/{WORLD}/set_pose@ros_gz_interfaces/srv/SetEntityPose'], 'target_marker_bridge.log')
         controller_log = (output/'controller.log').open('w', encoding='utf-8')
         streams.append(controller_log)
-        controller_module = 'crk_ch3.envelope_ros' if args.envelope_case else 'crk_ch3.motion_ros'
         controller = subprocess.Popen([sys.executable, '-u', '-m', controller_module, '--output', str(output)],
                                       env=env, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, bufsize=1, start_new_session=True)
@@ -194,7 +199,7 @@ def main():
                 for name in files:
                     os.chown(Path(directory)/name, uid, gid, follow_symlinks=False)
         print(f'Inspect {output}/summary.json', flush=True)
-    raise SystemExit(result)
+    return result
 
 
 if __name__ == '__main__':

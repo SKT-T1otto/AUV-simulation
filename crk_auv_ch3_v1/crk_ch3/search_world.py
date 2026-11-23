@@ -39,14 +39,14 @@ def build_search_world(scene, profile, frame=Frame()):
     return ET.tostring(sdf, encoding='unicode'), truth
 
 
-def search_bridge_yaml():
-    value = bridge_yaml()
+def search_bridge_yaml(vehicle_count=4):
+    value = bridge_yaml(vehicle_count)
     value += ('- ros_topic_name: "/g6/world_stats"\n'
               f'  gz_topic_name: "/world/{WORLD}/stats"\n'
               '  ros_type_name: "ros_gz_interfaces/msg/WorldStatistics"\n'
               '  gz_type_name: "gz.msgs.WorldStatistics"\n'
               '  direction: GZ_TO_ROS\n  lazy: false\n')
-    for i in range(4):
+    for i in range(vehicle_count):
         value += (f'- ros_topic_name: "/auv_{i}/contacts"\n'
                   f'  gz_topic_name: "/auv_{i}/contacts"\n'
                   '  ros_type_name: "ros_gz_interfaces/msg/Contacts"\n'

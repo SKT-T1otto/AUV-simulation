@@ -123,9 +123,9 @@ def build_motion_world(scene, profile, frame=Frame()):
     return ET.tostring(sdf, encoding='unicode'), truth
 
 
-def bridge_entries():
+def bridge_entries(vehicle_count=4):
     entries = [('/clock', f'/world/{WORLD}/clock', 'rosgraph_msgs/msg/Clock', 'gz.msgs.Clock', 'GZ_TO_ROS')]
-    for agent in range(4):
+    for agent in range(vehicle_count):
         entries.append((f'/auv_{agent}/odom', f'/model/auv_{agent}/odometry',
                         'nav_msgs/msg/Odometry', 'gz.msgs.Odometry', 'GZ_TO_ROS'))
         for index in range(8):
@@ -135,9 +135,9 @@ def bridge_entries():
     return entries
 
 
-def bridge_yaml():
+def bridge_yaml(vehicle_count=4):
     lines = []
-    for ros, gz, rt, gt, direction in bridge_entries():
+    for ros, gz, rt, gt, direction in bridge_entries(vehicle_count):
         lines += [f'- ros_topic_name: "{ros}"', f'  gz_topic_name: "{gz}"',
                   f'  ros_type_name: "{rt}"', f'  gz_type_name: "{gt}"',
                   f'  direction: {direction}', '  lazy: false']

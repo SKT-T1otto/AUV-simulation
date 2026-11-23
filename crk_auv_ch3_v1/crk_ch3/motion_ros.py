@@ -26,16 +26,18 @@ PHYSICS_NS = 2_000_000
 
 
 class MotionNode(Node):
+    vehicle_count = 4
+
     def __init__(self):
         super().__init__('crk_g4_four_vehicle_motion')
         self.clock_ns = -1
         self.error = None
         self.stopping = False
-        self.buffer = TeamStateBuffer()
+        self.buffer = TeamStateBuffer(self.vehicle_count)
         self.client = self.create_client(ControlWorld, f'/world/{WORLD}/control')
         self.subscriptions_ = [self.create_subscription(Clock, '/clock', self.on_clock, qos_profile_sensor_data)]
         self.publishers_ = []
-        for i in range(4):
+        for i in range(self.vehicle_count):
             self.subscriptions_.append(self.create_subscription(Odometry, f'/auv_{i}/odom',
                                       lambda message, agent=i: self.on_state(agent, message), qos_profile_sensor_data))
             self.publishers_.append([self.create_publisher(Float64, f'/auv_{i}/thruster_{j}/cmd_thrust', 1)
@@ -84,9 +86,9 @@ class MotionNode(Node):
 
     def publish(self, values, acknowledge=True):
         values = np.asarray(values, dtype=float)
-        if values.shape != (4, 8) or not np.isfinite(values).all():
-            raise ValueError('Invalid four-vehicle force command')
-        for i in range(4):
+        if values.shape != (self.vehicle_count, 8) or not np.isfinite(values).all():
+            raise ValueError('Invalid vehicle force command')
+        for i in range(self.vehicle_count):
             for j in range(8):
                 self.publishers_[i][j].publish(Float64(data=float(values[i, j])))
         if acknowledge:
@@ -127,12 +129,12 @@ class MotionNode(Node):
                 time.sleep(.1)
         self.wait(lambda: all(p.get_subscription_count() for row in self.publishers_ for p in row),
                   30., 'Missing one or more ROS thrust bridge subscribers')
-        self.publish(np.zeros((4, 8)))
+        self.publish(np.zeros((self.vehicle_count, 8)))
         # Flush the odometry finite-difference initialization transient before control.
         return self.step(20)[0]
 
     def stop_commands(self):
-        self.publish(np.zeros((4, 8)), acknowledge=False)
+        self.publish(np.zeros((self.vehicle_count, 8)), acknowledge=False)
         request = ControlWorld.Request()
         request.world_control.pause = True
         future = self.client.call_async(request)

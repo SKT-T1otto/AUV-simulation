@@ -41,7 +41,7 @@ class SearchNode(MotionNode):
         self.stats_sequence = 0
         self.stats_sub = self.create_subscription(WorldStatistics, '/g6/world_stats', self.on_stats, 10)
         self.contact_subs = [self.create_subscription(Contacts, f'/auv_{i}/contacts',
-            lambda msg, agent=i: self.on_contact(agent, msg), 100) for i in range(4)]
+            lambda msg, agent=i: self.on_contact(agent, msg), 100) for i in range(self.vehicle_count)]
         self.marker_client = self.create_client(SetEntityPose, f'/world/{WORLD}/set_pose')
 
     def on_stats(self, message):

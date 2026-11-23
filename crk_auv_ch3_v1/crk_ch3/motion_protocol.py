@@ -24,12 +24,12 @@ class BodyState:
 
 
 class TeamStateBuffer:
-    def __init__(self):
-        self.by_agent = [dict() for _ in range(4)]
+    def __init__(self, vehicle_count=4):
+        self.by_agent = [dict() for _ in range(vehicle_count)]
         self.last_accepted_ns = -1
 
     def push(self, agent, state, frame_id='map', child_frame=None):
-        if type(agent) is not int or agent not in range(4):
+        if type(agent) is not int or agent not in range(len(self.by_agent)):
             raise ValueError('Unknown agent ID')
         if frame_id != 'map' or child_frame != f'auv_{agent}/base_link':
             raise ValueError('Odometry frame mismatch')
